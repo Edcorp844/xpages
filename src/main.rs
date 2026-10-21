@@ -1,11 +1,32 @@
-use relm4::{adw, adw::prelude::*, prelude::*};
+//! XPages — GTK shell + WordCraft document canvas (egui).
+//!
+//! Menus / window chrome: GTK (Relm4 + Adwaita).
+//! Document pages: Session.layout() → wordcraft_render::render_page → egui textures.
+//!
+//! EguiArea::set_ui must receive `&mut egui::Ui` (egui 0.37 run_ui). Do not call
+//! Context::root_ui from that callback.
+
 use std::cell::RefCell;
-use std::path::PathBuf;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Once;
 
+use relm4::{adw, adw::prelude::*, prelude::*};
+use serde_json::json;
+
 mod components;
 use components::EguiArea;
+
+/// ~1 CSS pixel per typographic point (WordCraft canvas convention).
+const PX_PER_PT: f32 = 96.0 / 72.0;
+const DEFAULT_ZOOM: f32 = 1.0;
+const PAGE_GAP: f32 = 20.0;
+const MARGIN_X: f32 = 40.0;
+
+// ---------------------------------------------------------------------------
+// Fonts (optional CJK for empty-state UI labels)
+// ---------------------------------------------------------------------------
 
 fn setup_cjk_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
@@ -31,105 +52,141 @@ fn setup_cjk_fonts(ctx: &egui::Context) {
     }
 }
 
-fn load_document(path: &std::path::Path) -> Result<wordcraft_engine::Session, String> {
-    let data = std::fs::read(path).map_err(|e| format!("read {}: {e}", path.display()))?;
-    let text = String::from_utf8_lossy(&data).into_owned();
-    let mut session = wordcraft_engine::Session::new(wordcraft_doc::Document::new());
+// ---------------------------------------------------------------------------
+// Document open via WordCraft engine
+// ---------------------------------------------------------------------------
+
+fn load_document(path: &Path) -> Result<wordcraft_engine::Session, String> {
+    let mut session =
+        wordcraft_engine::Session::new(wordcraft_doc::Document::new());
     session
-        .run("text.insert", &serde_json::json!({ "text": text }))
-        .map_err(|e| format!("text.insert: {e:?}"))?;
+        .run(
+            "file.open",
+            &json!({ "path": path.to_string_lossy() }),
+        )
+        .map_err(|e| format!("file.open {}: {e}", path.display()))?;
     Ok(session)
 }
 
-fn paint_layout(ui: &mut egui::Ui, session: &Rc<RefCell<wordcraft_engine::Session>>) {
-    let mut session = session.borrow_mut();
-    let layout = session.layout();
 
-    const ZOOM: f32 = 1.0;
-    const PAGE_GAP: f32 = 20.0;
-    const MARGIN_X: f32 = 50.0;
 
-    egui::ScrollArea::vertical()
-        .auto_shrink([false, false])
-        .show(ui, |ui| {
-            // Make the scroll content at least as wide as the view
-            ui.set_min_width(ui.available_width());
+// ---------------------------------------------------------------------------
+// Canvas: full-page rasters as egui textures
+// ---------------------------------------------------------------------------
 
-            for page in &layout.pages {
-                let page_w = page.w as f32 * ZOOM;
-                let page_h = page.h as f32 * ZOOM;
-
-                // Horizontal inset: full row width so layout is stable
-                let row_w = (page_w + MARGIN_X * 2.0).max(ui.available_width());
-                let row_h = page_h + PAGE_GAP;
-
-                // ★ This is what makes scrolling work
-                let (response, painter) =
-                    ui.allocate_painter(egui::vec2(row_w, row_h), egui::Sense::hover());
-
-                let page_rect = egui::Rect::from_min_size(
-                    egui::pos2(response.rect.min.x + MARGIN_X, response.rect.min.y),
-                    egui::vec2(page_w, page_h),
-                );
-
-                // Page background
-                painter.rect_filled(page_rect, 0.0, egui::Color32::WHITE);
-                painter.rect_stroke(
-                    page_rect,
-                    0.0,
-                    egui::Stroke::new(1.0, egui::Color32::from_gray(160)),
-                    egui::StrokeKind::Outside,
-                );
-
-                // Content
-                for placed in &page.items {
-                    paint_placed(&painter, page_rect, placed, ZOOM);
-                }
-            }
-        });
+struct DocCanvas {
+    /// page index → (cache key, texture)
+    textures: HashMap<usize, (u64, egui::TextureHandle)>,
 }
 
-/// Draw one layout item. Adjust arms to your real `Placed` enum.
-fn paint_placed(
-    painter: &egui::Painter,
-    page_rect: egui::Rect,
-    placed: &wordcraft_layout::Placed, // use your actual type
-    zoom: f32,
-) {
-    // Inspect with: eprintln!("{placed:?}");
-    match placed {
-        // --- examples: rename fields to match crates/layout ---
-        //
-        // wordcraft_layout::Placed::TextRun { rect, text, size, .. } => {
-        //     let pos = egui::pos2(
-        //         page_rect.min.x + rect.x as f32 * zoom,
-        //         page_rect.min.y + rect.y as f32 * zoom,
-        //     );
-        //     painter.text(
-        //         pos,
-        //         egui::Align2::LEFT_TOP,
-        //         text,
-        //         egui::FontId::proportional((*size as f32 * zoom).max(8.0)),
-        //         egui::Color32::BLACK,
-        //     );
-        // }
-        // wordcraft_layout::Placed::GlyphRun { rect, glyphs, .. } => { ... }
-        // wordcraft_layout::Placed::Rect { rect, .. } => {
-        //     let r = egui::Rect::from_min_size(
-        //         egui::pos2(
-        //             page_rect.min.x + rect.x as f32 * zoom,
-        //             page_rect.min.y + rect.y as f32 * zoom,
-        //         ),
-        //         egui::vec2(rect.w as f32 * zoom, rect.h as f32 * zoom),
-        //     );
-        //     painter.rect_filled(r, 0.0, egui::Color32::LIGHT_BLUE);
-        // }
-        _ => {
-            // Temporary: show *something* so you know items exist
-            // If you see blue boxes, layout is fine and only the match is wrong.
+impl Default for DocCanvas {
+    fn default() -> Self {
+        Self {
+            textures: HashMap::new(),
         }
     }
 }
+
+impl DocCanvas {
+    fn clear(&mut self) {
+        self.textures.clear();
+    }
+
+    fn show(
+        &mut self,
+        ui: &mut egui::Ui,
+        session: &mut wordcraft_engine::Session,
+        zoom: f32,
+    ) {
+        let layout = session.layout();
+        let scale_px = (zoom * PX_PER_PT).max(0.25);
+
+        // Cache key: page count + zoom bits (replace with session.rev() if public).
+        let base_key = (layout.pages.len() as u64) ^ ((scale_px.to_bits() as u64) << 16);
+
+        egui::ScrollArea::both()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                ui.set_min_width(ui.available_width());
+
+                for (i, page) in layout.pages.iter().enumerate() {
+                    let screen_w = page.w * scale_px;
+                    let screen_h = page.h * scale_px;
+                    let row_w = (screen_w + MARGIN_X * 2.0).max(ui.available_width());
+                    let row_h = screen_h + PAGE_GAP;
+
+                    let (response, painter) =
+                        ui.allocate_painter(egui::vec2(row_w, row_h), egui::Sense::hover());
+
+                    let page_rect = egui::Rect::from_min_size(
+                        response.rect.min + egui::vec2(MARGIN_X, 0.0),
+                        egui::vec2(screen_w, screen_h),
+                    );
+
+                    // Soft shadow
+                    painter.rect_filled(
+                        page_rect.translate(egui::vec2(2.0, 2.0)),
+                        2.0,
+                        egui::Color32::from_black_alpha(28),
+                    );
+
+                    let key = base_key ^ ((i as u64) << 32);
+
+                    let stale = self
+                        .textures
+                        .get(&i)
+                        .map(|(k, _)| *k != key)
+                        .unwrap_or(true);
+
+                    if stale {
+                        let img = wordcraft_render::render_page(
+                            &session.doc,
+                            page,
+                            scale_px,
+                            &wordcraft_render::RenderOptions::default(),
+                        );
+                        let color = egui::ColorImage::from_rgba_premultiplied(
+                            [img.width as usize, img.height as usize],
+                            &img.pixels,
+                        );
+                        match self.textures.get_mut(&i) {
+                            Some((k, tex)) => {
+                                tex.set(color, egui::TextureOptions::LINEAR);
+                                *k = key;
+                            }
+                            None => {
+                                let tex = ui.ctx().load_texture(
+                                    format!("page{i}"),
+                                    color,
+                                    egui::TextureOptions::LINEAR,
+                                );
+                                self.textures.insert(i, (key, tex));
+                            }
+                        }
+                    }
+
+                    if let Some((_, tex)) = self.textures.get(&i) {
+                        painter.image(
+                            tex.id(),
+                            page_rect,
+                            egui::Rect::from_min_max(
+                                egui::pos2(0.0, 0.0),
+                                egui::pos2(1.0, 1.0),
+                            ),
+                            egui::Color32::WHITE,
+                        );
+                    }
+                }
+            });
+
+        let n = layout.pages.len();
+        self.textures.retain(|i, _| *i < n);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// App
+// ---------------------------------------------------------------------------
 
 #[derive(Debug)]
 enum AppMsg {
@@ -139,10 +196,10 @@ enum AppMsg {
 }
 
 struct AppModel {
-    /// Filled in `init` *after* `view_output!()`, then kept for the component lifetime.
     egui_area: Option<EguiArea>,
     session: Rc<RefCell<wordcraft_engine::Session>>,
     has_document: Rc<RefCell<bool>>,
+    canvas: Rc<RefCell<DocCanvas>>,
     open_path: Option<PathBuf>,
     subtitle: String,
     status: String,
@@ -161,42 +218,27 @@ impl SimpleComponent for AppModel {
             set_default_size: (960, 700),
 
             #[wrap(Some)]
-            set_content = &adw::OverlaySplitView {
-                set_show_sidebar: false,
-
-                #[wrap(Some)]
-                set_sidebar = &adw::ToolbarView {
-                    add_top_bar = &adw::HeaderBar {},
+            set_content = &adw::ToolbarView {
+                add_top_bar = &adw::HeaderBar {
+                    pack_start = &gtk::Button {
+                        set_label: "Open",
+                        set_tooltip_text: Some("Open a document"),
+                        connect_clicked => AppMsg::RequestOpen,
+                    },
+                    #[wrap(Some)]
+                    set_title_widget = &adw::WindowTitle {
+                        set_title: "XPages",
+                        #[watch]
+                        set_subtitle: &model.subtitle,
+                    },
                 },
 
                 #[wrap(Some)]
-                set_content = &adw::NavigationPage {
-                    set_title: "XPages",
-
-                    #[wrap(Some)]
-                    set_child = &adw::ToolbarView {
-                        add_top_bar = &adw::HeaderBar {
-                            pack_start = &gtk::Button {
-                                set_label: "Open",
-                                set_tooltip_text: Some("Open a document"),
-                                connect_clicked => AppMsg::RequestOpen,
-                            },
-                            #[wrap(Some)]
-                            set_title_widget = &adw::WindowTitle {
-                                set_title: "XPages",
-                                #[watch]
-                                set_subtitle: &model.subtitle,
-                            },
-                        },
-
-                        #[wrap(Some)]
-                        #[name = "content_box"]
-                        set_content = &gtk::Box {
-                            set_orientation: gtk::Orientation::Vertical,
-                            set_vexpand: true,
-                            set_hexpand: true,
-                        },
-                    },
+                #[name = "content_box"]
+                set_content = &gtk::Box {
+                    set_orientation: gtk::Orientation::Vertical,
+                    set_vexpand: true,
+                    set_hexpand: true,
                 },
             },
         }
@@ -207,58 +249,63 @@ impl SimpleComponent for AppModel {
         _root: Self::Root,
         sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
-        // ------------------------------------------------------------------
-        // 1) Model first (so `view_output!` can see `model`)
-        // ------------------------------------------------------------------
+        // 1) Model first so view_output! can see `model`
         let session = Rc::new(RefCell::new(wordcraft_engine::Session::new(
             wordcraft_doc::Document::new(),
         )));
         let has_document = Rc::new(RefCell::new(false));
+        let canvas = Rc::new(RefCell::new(DocCanvas::default()));
 
         let mut model = AppModel {
             egui_area: None,
             session: Rc::clone(&session),
             has_document: Rc::clone(&has_document),
+            canvas: Rc::clone(&canvas),
             open_path: None,
             subtitle: "No document".into(),
             status: String::new(),
         };
 
-        // ------------------------------------------------------------------
-        // 2) Widgets (uses `model` for #[watch])
-        // ------------------------------------------------------------------
+        // 2) Widgets
         let widgets = view_output!();
 
-        // ------------------------------------------------------------------
         // 3) Egui area after model + widgets, then append
-        // ------------------------------------------------------------------
         let session_for_ui = Rc::clone(&session);
         let has_document_for_ui = Rc::clone(&has_document);
+        let canvas_for_ui = Rc::clone(&canvas);
         let sender_for_ui = sender.clone();
 
         let egui_area = EguiArea::default();
         egui_area.set_vexpand(true);
         egui_area.set_hexpand(true);
 
-        egui_area.set_ui(move |ctx| {
+        // EguiArea must call this from inside ctx.run_ui(|ui| …).
+        // Callback signature: FnMut(&mut egui::Ui)  — NOT &Context.
+        egui_area.set_ui(move |ui: &mut egui::Ui| {
             static FONTS: Once = Once::new();
-            FONTS.call_once(|| setup_cjk_fonts(ctx));
+            FONTS.call_once(|| setup_cjk_fonts(ui.ctx()));
 
-            egui::CentralPanel::default().show(ctx, |ui| {
-                if !*has_document_for_ui.borrow() {
-                    ui.vertical_centered(|ui| {
-                        ui.add_space(ui.available_height() * 0.35);
-                        ui.heading("No document open");
-                        ui.label("Open a file to render it on the canvas.");
-                        ui.add_space(12.0);
-                        if ui.button("Open document…").clicked() {
-                            sender_for_ui.input(AppMsg::RequestOpen);
-                        }
-                    });
-                    return;
-                }
-                paint_layout(ui, &session_for_ui);
-            });
+            // Already the root Ui — do not call ctx.root_ui().
+            egui::CentralPanel::default()
+                .frame(egui::Frame::NONE.fill(egui::Color32::from_gray(220)))
+                .show(ui, |ui| {
+                    if !*has_document_for_ui.borrow() {
+                        ui.vertical_centered(|ui| {
+                            ui.add_space(ui.available_height() * 0.35);
+                            ui.heading("No document open");
+                            ui.label("Open a file to render it on the canvas.");
+                            ui.add_space(12.0);
+                            if ui.button("Open document…").clicked() {
+                                sender_for_ui.input(AppMsg::RequestOpen);
+                            }
+                        });
+                        return;
+                    }
+
+                    let mut session = session_for_ui.borrow_mut();
+                    let mut canvas = canvas_for_ui.borrow_mut();
+                    canvas.show(ui, &mut session, DEFAULT_ZOOM);
+                });
         });
 
         widgets.content_box.append(&egui_area);
@@ -276,15 +323,26 @@ impl SimpleComponent for AppModel {
                     .build();
 
                 let filters = gtk::gio::ListStore::new::<gtk::FileFilter>();
+
+                let office = gtk::FileFilter::new();
+                office.set_name(Some("Word / OpenDocument"));
+                for pat in ["*.docx", "*.docm", "*.dotx", "*.odt", "*.rtf"] {
+                    office.add_pattern(pat);
+                }
+                filters.append(&office);
+
+                let text = gtk::FileFilter::new();
+                text.set_name(Some("Text / Markdown"));
+                for pat in ["*.txt", "*.md", "*.markdown", "*.html", "*.htm"] {
+                    text.add_pattern(pat);
+                }
+                filters.append(&text);
+
                 let all = gtk::FileFilter::new();
                 all.set_name(Some("All files"));
                 all.add_pattern("*");
                 filters.append(&all);
-                let text = gtk::FileFilter::new();
-                text.set_name(Some("Text / JSON"));
-                text.add_pattern("*.txt");
-                text.add_pattern("*.json");
-                filters.append(&text);
+
                 dialog.set_filters(Some(&filters));
 
                 let sender = sender.clone();
@@ -313,11 +371,14 @@ impl SimpleComponent for AppModel {
             AppMsg::OpenPath(path) => match load_document(&path) {
                 Ok(new_session) => {
                     *self.session.borrow_mut() = new_session;
-                    self.subtitle = path.display().to_string();
+                    self.canvas.borrow_mut().clear();
+                    self.subtitle = path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| path.display().to_string());
                     self.open_path = Some(path);
                     *self.has_document.borrow_mut() = true;
                     self.status.clear();
-                    // Ask the GL area to redraw after load
                     if let Some(area) = self.egui_area.as_ref() {
                         area.queue_draw();
                     }
