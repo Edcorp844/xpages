@@ -26,8 +26,15 @@ pub struct InkDrag {
 
 /// The lasso in use: a loop being drawn, or the selection being dragged (page points).
 pub enum LassoDrag {
-    Loop { page: usize, pts: Vec<[f32; 2]> },
-    Move { page: usize, from: [f32; 2], to: [f32; 2] },
+    Loop {
+        page: usize,
+        pts: Vec<[f32; 2]>,
+    },
+    Move {
+        page: usize,
+        from: [f32; 2],
+        to: [f32; 2],
+    },
 }
 
 /// Ink Replay in progress: the strokes in drawing order and how far it has got.
@@ -65,7 +72,14 @@ const GRAB_SLOP: f32 = 4.0;
 
 /// Handle the pointer while a pen, the eraser or the lasso is in use; `true` when it did (no
 /// text selection or object dragging then).
-pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layout: &DocLayout, scale: f32) -> bool {
+pub fn pointer(
+    app: &mut WordApp,
+    ui: &Ui,
+    resp: &egui::Response,
+    rects: &[Rect],
+    layout: &DocLayout,
+    scale: f32,
+) -> bool {
     let mode = app.session.view.draw.mode;
     if mode != DrawMode::Lasso {
         app.canvas.ink_ui.lasso = None;
@@ -78,25 +92,41 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect]
         app.canvas.erasing = None;
         return false;
     }
-    let (pressed, down, released, at) =
-        ui.input(|i| (i.pointer.primary_pressed(), i.pointer.primary_down(), i.pointer.primary_released(), i.pointer.latest_pos()));
+    let (pressed, down, released, at) = ui.input(|i| {
+        (
+            i.pointer.primary_pressed(),
+            i.pointer.primary_down(),
+            i.pointer.primary_released(),
+            i.pointer.latest_pos(),
+        )
+    });
     let starts = pressed && resp.contains_pointer();
     match mode {
         DrawMode::Pen(tool) => {
-            if starts && let Some((page, x, y)) = at.and_then(|p| page_at(rects, layout, scale, p)) {
-                app.canvas.ink = Some(InkDrag { page, tool, pts: vec![[x, y]] });
+            if starts && let Some((page, x, y)) = at.and_then(|p| page_at(rects, layout, scale, p))
+            {
+                app.canvas.ink = Some(InkDrag {
+                    page,
+                    tool,
+                    pts: vec![[x, y]],
+                });
             } else if down
                 && let Some(p) = at
                 && let Some(d) = app.canvas.ink.as_mut()
                 && let Some((x, y)) = on_page(rects, layout, scale, d.page, p)
             {
-                let far = d.pts.last().is_none_or(|[lx, ly]| ((x - lx).powi(2) + (y - ly).powi(2)).sqrt() * scale >= MIN_STEP_PX);
+                let far = d.pts.last().is_none_or(|[lx, ly]| {
+                    ((x - lx).powi(2) + (y - ly).powi(2)).sqrt() * scale >= MIN_STEP_PX
+                });
                 if far && d.pts.len() < MAX_POINTS {
                     d.pts.push([x, y]);
                 }
             }
             if released && let Some(d) = app.canvas.ink.take() {
-                let _ = app.run("draw.stroke", json!({"page": d.page, "points": d.pts, "tool": d.tool.name()}));
+                let _ = app.run(
+                    "draw.stroke",
+                    json!({"page": d.page, "points": d.pts, "tool": d.tool.name()}),
+                );
             }
         }
         DrawMode::Eraser => {
@@ -112,7 +142,10 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect]
                 if erased {
                     app.session.join_next_undo();
                 }
-                if app.run("draw.erase", json!({"page": page, "x": x, "y": y})).is_ok() {
+                if app
+                    .run("draw.erase", json!({"page": page, "x": x, "y": y}))
+                    .is_ok()
+                {
                     app.canvas.erasing = Some(true);
                 }
             }
@@ -126,14 +159,36 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect]
     true
 }
 
-fn lasso_pointer(app: &mut WordApp, (starts, down, released, at): (bool, bool, bool, Option<Pos2>), rects: &[Rect], layout: &DocLayout, scale: f32) {
+fn lasso_pointer(
+    app: &mut WordApp,
+    (starts, down, released, at): (bool, bool, bool, Option<Pos2>),
+    rects: &[Rect],
+    layout: &DocLayout,
+    scale: f32,
+) {
     if starts && let Some((page, x, y)) = at.and_then(|p| page_at(rects, layout, scale, p)) {
         // A press on the selection drags it; anywhere else starts a new loop.
-        let grab = wordcraft_engine::cmd::draw::lasso_bounds(&app.session, layout).is_some_and(|(bp, r)| {
-            bp == page && x >= r.x - GRAB_SLOP && x <= r.right() + GRAB_SLOP && y >= r.y - GRAB_SLOP && y <= r.bottom() + GRAB_SLOP
+        let grab = wordcraft_engine::cmd::draw::lasso_bounds(&app.session, layout).is_some_and(
+            |(bp, r)| {
+                bp == page
+                    && x >= r.x - GRAB_SLOP
+                    && x <= r.right() + GRAB_SLOP
+                    && y >= r.y - GRAB_SLOP
+                    && y <= r.bottom() + GRAB_SLOP
+            },
+        );
+        app.canvas.ink_ui.lasso = Some(if grab {
+            LassoDrag::Move {
+                page,
+                from: [x, y],
+                to: [x, y],
+            }
+        } else {
+            LassoDrag::Loop {
+                page,
+                pts: vec![[x, y]],
+            }
         });
-        app.canvas.ink_ui.lasso =
-            Some(if grab { LassoDrag::Move { page, from: [x, y], to: [x, y] } } else { LassoDrag::Loop { page, pts: vec![[x, y]] } });
     } else if down
         && let Some(p) = at
         && let Some(d) = app.canvas.ink_ui.lasso.as_mut()
@@ -141,7 +196,9 @@ fn lasso_pointer(app: &mut WordApp, (starts, down, released, at): (bool, bool, b
         match d {
             LassoDrag::Loop { page, pts } => {
                 if let Some((x, y)) = on_page(rects, layout, scale, *page, p) {
-                    let far = pts.last().is_none_or(|[lx, ly]| ((x - lx).powi(2) + (y - ly).powi(2)).sqrt() * scale >= MIN_STEP_PX * 2.0);
+                    let far = pts.last().is_none_or(|[lx, ly]| {
+                        ((x - lx).powi(2) + (y - ly).powi(2)).sqrt() * scale >= MIN_STEP_PX * 2.0
+                    });
                     if far && pts.len() < MAX_POINTS {
                         pts.push([x, y]);
                     }
@@ -195,7 +252,13 @@ pub fn key(app: &mut WordApp, key: Key) -> bool {
 }
 
 /// Page point under screen point `p` on `page` (outside the page too, clamped by the command).
-fn on_page(rects: &[Rect], layout: &DocLayout, scale: f32, page: usize, p: Pos2) -> Option<(f32, f32)> {
+fn on_page(
+    rects: &[Rect],
+    layout: &DocLayout,
+    scale: f32,
+    page: usize,
+    p: Pos2,
+) -> Option<(f32, f32)> {
     let r = rects.get(page)?;
     let s = page_scale(rects, layout, scale, page)?;
     Some(((p.x - r.min.x) / s, (p.y - r.min.y) / s))
@@ -204,12 +267,20 @@ fn on_page(rects: &[Rect], layout: &DocLayout, scale: f32, page: usize, p: Pos2)
 /// Screen points per page point on `page`.
 fn page_scale(rects: &[Rect], layout: &DocLayout, scale: f32, page: usize) -> Option<f32> {
     let r = rects.get(page)?;
-    let s = layout.pages.get(page).map_or(scale, |pg| crate::canvas::page_screen_scale(*r, pg, scale));
+    let s = layout
+        .pages
+        .get(page)
+        .map_or(scale, |pg| crate::canvas::page_screen_scale(*r, pg, scale));
     (s > 0.0).then_some(s)
 }
 
 /// Page points to screen points on `page`.
-fn to_screen(rects: &[Rect], layout: &DocLayout, scale: f32, page: usize) -> Option<impl Fn([f32; 2]) -> Pos2> {
+fn to_screen(
+    rects: &[Rect],
+    layout: &DocLayout,
+    scale: f32,
+    page: usize,
+) -> Option<impl Fn([f32; 2]) -> Pos2> {
     let r = *rects.get(page)?;
     let s = page_scale(rects, layout, scale, page)?;
     Some(move |[x, y]: [f32; 2]| pos2(r.min.x + x * s, r.min.y + y * s))
@@ -218,7 +289,10 @@ fn to_screen(rects: &[Rect], layout: &DocLayout, scale: f32, page: usize) -> Opt
 /// The on-screen colour of ink: on a dark page (View > Switch Modes) it is mapped like every other
 /// document colour, so a stroke looks the same while it is drawn as after it is saved.
 fn screen_ink(dark: bool, c: wordcraft_doc::Rgb, alpha: u8) -> Color32 {
-    let opts = wordcraft_render::RenderOptions { dark, ..Default::default() };
+    let opts = wordcraft_render::RenderOptions {
+        dark,
+        ..Default::default()
+    };
     let wordcraft_doc::Rgb(r, g, b) = opts.ink(c);
     Color32::from_rgba_unmultiplied(r, g, b, alpha)
 }
@@ -228,7 +302,9 @@ pub fn paint(app: &WordApp, painter: &Painter, rects: &[Rect], layout: &DocLayou
     paint_replay(app, painter, rects, layout, scale);
     paint_lasso(app, painter, rects, layout, scale);
     let Some(d) = &app.canvas.ink else { return };
-    let Some(map) = to_screen(rects, layout, scale, d.page) else { return };
+    let Some(map) = to_screen(rects, layout, scale, d.page) else {
+        return;
+    };
     let s = page_scale(rects, layout, scale, d.page).unwrap_or(scale);
     let set = app.session.view.draw.settings(d.tool);
     let alpha = (d.tool.alpha() * 255.0).round() as u8;
@@ -254,22 +330,37 @@ fn paint_lasso(app: &WordApp, painter: &Painter, rects: &[Rect], layout: &DocLay
         }
         painter.extend(dash(&loop_pts));
     }
-    let Some((page, r)) = wordcraft_engine::cmd::draw::lasso_bounds(&app.session, layout) else { return };
+    let Some((page, r)) = wordcraft_engine::cmd::draw::lasso_bounds(&app.session, layout) else {
+        return;
+    };
     let (dx, dy) = match &app.canvas.ink_ui.lasso {
         Some(LassoDrag::Move { from, to, .. }) => (to[0] - from[0], to[1] - from[1]),
         _ => (0.0, 0.0),
     };
-    let Some(map) = to_screen(rects, layout, scale, page) else { return };
-    let (a, b) = (map([r.x + dx, r.y + dy]), map([r.right() + dx, r.bottom() + dy]));
+    let Some(map) = to_screen(rects, layout, scale, page) else {
+        return;
+    };
+    let (a, b) = (
+        map([r.x + dx, r.y + dy]),
+        map([r.right() + dx, r.bottom() + dy]),
+    );
     let sr = Rect::from_min_max(a, b).expand(3.0);
-    painter.extend(dash(&[sr.left_top(), sr.right_top(), sr.right_bottom(), sr.left_bottom(), sr.left_top()]));
+    painter.extend(dash(&[
+        sr.left_top(),
+        sr.right_top(),
+        sr.right_bottom(),
+        sr.left_bottom(),
+        sr.left_top(),
+    ]));
 }
 
 /// The pointer over the page while a pen, the eraser or the lasso is in use.
 pub fn cursor(app: &WordApp) -> Option<egui::CursorIcon> {
     match app.session.view.draw.mode {
         DrawMode::Select => None,
-        DrawMode::Lasso if matches!(app.canvas.ink_ui.lasso, Some(LassoDrag::Move { .. })) => Some(egui::CursorIcon::Grabbing),
+        DrawMode::Lasso if matches!(app.canvas.ink_ui.lasso, Some(LassoDrag::Move { .. })) => {
+            Some(egui::CursorIcon::Grabbing)
+        }
         DrawMode::Eraser | DrawMode::Pen(_) | DrawMode::Lasso => Some(egui::CursorIcon::Crosshair),
     }
 }
@@ -285,25 +376,41 @@ pub fn replay_tick(app: &mut WordApp, ctx: &egui::Context) {
     }
     if app.canvas.ink_ui.replay.is_none() {
         let mut start = 0.0;
-        let strokes: Vec<ReplayStroke> = wordcraft_engine::cmd::draw::strokes_in_drawing_order(&mut app.session)
-            .into_iter()
-            .map(|(page, k)| {
-                let paths = k.paths();
-                let len: f32 = paths.iter().map(|p| path_len(p)).sum();
-                let dur = (len / REPLAY_SPEED).clamp(0.15, 2.5);
-                let alpha = (k.freeform.alpha.clamp(0.0, 1.0) * 255.0).round() as u8;
-                let c = k.color.unwrap_or_default();
-                let width = if k.width.is_finite() { k.width.clamp(0.25, 72.0) } else { 1.0 };
-                let st = ReplayStroke { page, paths, color: Color32::from_rgba_unmultiplied(c.0, c.1, c.2, alpha), width, start, dur };
-                start += dur + REPLAY_GAP;
-                st
-            })
-            .collect();
+        let strokes: Vec<ReplayStroke> =
+            wordcraft_engine::cmd::draw::strokes_in_drawing_order(&mut app.session)
+                .into_iter()
+                .map(|(page, k)| {
+                    let paths = k.paths();
+                    let len: f32 = paths.iter().map(|p| path_len(p)).sum();
+                    let dur = (len / REPLAY_SPEED).clamp(0.15, 2.5);
+                    let alpha = (k.freeform.alpha.clamp(0.0, 1.0) * 255.0).round() as u8;
+                    let c = k.color.unwrap_or_default();
+                    let width = if k.width.is_finite() {
+                        k.width.clamp(0.25, 72.0)
+                    } else {
+                        1.0
+                    };
+                    let st = ReplayStroke {
+                        page,
+                        paths,
+                        color: Color32::from_rgba_unmultiplied(c.0, c.1, c.2, alpha),
+                        width,
+                        start,
+                        dur,
+                    };
+                    start += dur + REPLAY_GAP;
+                    st
+                })
+                .collect();
         if strokes.is_empty() {
             stop_replay(app);
             return;
         }
-        app.canvas.ink_ui.replay = Some(Replay { strokes, t: 0.0, playing: true });
+        app.canvas.ink_ui.replay = Some(Replay {
+            strokes,
+            t: 0.0,
+            playing: true,
+        });
     }
     let dt = ctx.input(|i| i.stable_dt).clamp(0.0, 0.1);
     if let Some(r) = app.canvas.ink_ui.replay.as_mut()
@@ -328,25 +435,42 @@ impl Replay {
 }
 
 fn path_len(p: &[[f32; 2]]) -> f32 {
-    p.windows(2).filter_map(|w| Some((w.first()?, w.get(1)?))).map(|(a, b)| (b[0] - a[0]).hypot(b[1] - a[1])).sum()
+    p.windows(2)
+        .filter_map(|w| Some((w.first()?, w.get(1)?)))
+        .map(|(a, b)| (b[0] - a[0]).hypot(b[1] - a[1]))
+        .sum()
 }
 
 /// The replayed ink so far: finished strokes whole, the current one up to where it has got.
 fn paint_replay(app: &WordApp, painter: &Painter, rects: &[Rect], layout: &DocLayout, scale: f32) {
-    let Some(r) = &app.canvas.ink_ui.replay else { return };
+    let Some(r) = &app.canvas.ink_ui.replay else {
+        return;
+    };
     for k in r.strokes.iter().filter(|k| k.start <= r.t) {
-        let Some(map) = to_screen(rects, layout, scale, k.page) else { continue };
+        let Some(map) = to_screen(rects, layout, scale, k.page) else {
+            continue;
+        };
         let s = page_scale(rects, layout, scale, k.page).unwrap_or(scale);
-        let frac = if k.dur > 0.0 { ((r.t - k.start) / k.dur).clamp(0.0, 1.0) } else { 1.0 };
+        let frac = if k.dur > 0.0 {
+            ((r.t - k.start) / k.dur).clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
         let total: f32 = k.paths.iter().map(|p| path_len(p)).sum();
         let [cr, cg, cb, ca] = k.color.to_srgba_unmultiplied();
-        let color = screen_ink(app.session.view.dark_mode, wordcraft_doc::Rgb(cr, cg, cb), ca);
+        let color = screen_ink(
+            app.session.view.dark_mode,
+            wordcraft_doc::Rgb(cr, cg, cb),
+            ca,
+        );
         let mut left = total * frac;
         let width = (k.width * s).max(1.0);
         for path in &k.paths {
             let mut pts: Vec<Pos2> = Vec::new();
             for w in path.windows(2) {
-                let (Some(a), Some(b)) = (w.first(), w.get(1)) else { continue };
+                let (Some(a), Some(b)) = (w.first(), w.get(1)) else {
+                    continue;
+                };
                 if pts.is_empty() {
                     pts.push(map(*a));
                 }
@@ -385,10 +509,12 @@ fn stop_replay(app: &mut WordApp) {
 /// Ink Replay's controls at the bottom of the document area: Rewind, Play/Pause, Forward (to
 /// the end of the stroke being drawn), how far it has got, and Close.
 pub fn replay_bar(app: &mut WordApp, ui: &Ui, area: Rect) {
-    let Some(r) = app.canvas.ink_ui.replay.as_ref() else { return };
+    let Some(r) = app.canvas.ink_ui.replay.as_ref() else {
+        return;
+    };
     let (playing, n, total) = (r.playing, r.started(), r.strokes.len());
     let mut action = None;
-    egui::Area::new(egui::Id::new("ink_replay_bar"))
+    egui::Area::new(egui::Id::unique("ink_replay_bar"))
         .order(egui::Order::Foreground)
         .pivot(Align2::CENTER_BOTTOM)
         .fixed_pos(pos2(area.center().x, area.max.y - 18.0))
@@ -399,14 +525,21 @@ pub fn replay_bar(app: &mut WordApp, ui: &Ui, area: Rect) {
                     if crate::widgets::icon_button(ui, "replayRewind", tl!("Rewind")).clicked() {
                         action = Some("rewind");
                     }
-                    let (icon, tip) = if playing { ("replayPause", tl!("Pause")) } else { ("replayPlay", tl!("Play")) };
+                    let (icon, tip) = if playing {
+                        ("replayPause", tl!("Pause"))
+                    } else {
+                        ("replayPlay", tl!("Play"))
+                    };
                     if crate::widgets::icon_button(ui, icon, tip).clicked() {
                         action = Some("play");
                     }
                     if crate::widgets::icon_button(ui, "replayForward", tl!("Forward")).clicked() {
                         action = Some("forward");
                     }
-                    let label = crate::i18n::fmt(tl!("Stroke {n} of {total}"), &[("n", &n.to_string()), ("total", &total.to_string())]);
+                    let label = crate::i18n::fmt(
+                        tl!("Stroke {n} of {total}"),
+                        &[("n", &n.to_string()), ("total", &total.to_string())],
+                    );
                     ui.label(label);
                     if crate::widgets::icon_button(ui, "close", tl!("Close")).clicked() {
                         action = Some("close");
@@ -419,7 +552,9 @@ pub fn replay_bar(app: &mut WordApp, ui: &Ui, area: Rect) {
         stop_replay(app);
         return;
     }
-    let Some(r) = app.canvas.ink_ui.replay.as_mut() else { return };
+    let Some(r) = app.canvas.ink_ui.replay.as_mut() else {
+        return;
+    };
     match a {
         "rewind" => r.t = 0.0,
         "play" if r.playing => r.playing = false,
@@ -433,7 +568,12 @@ pub fn replay_bar(app: &mut WordApp, ui: &Ui, area: Rect) {
         _ => {
             // Forward: finish the stroke being drawn, or the next one between strokes.
             let t = r.t;
-            r.t = r.strokes.iter().map(|s| s.start + s.dur).find(|e| *e > t + 1e-3).unwrap_or(r.end());
+            r.t = r
+                .strokes
+                .iter()
+                .map(|s| s.start + s.dur)
+                .find(|e| *e > t + 1e-3)
+                .unwrap_or(r.end());
         }
     }
     ui.ctx().request_repaint();
@@ -446,7 +586,10 @@ mod tests {
     #[test]
     fn live_ink_follows_the_dark_page() {
         let black = wordcraft_doc::Rgb(0, 0, 0);
-        assert_eq!(screen_ink(false, black, 255), Color32::from_rgba_unmultiplied(0, 0, 0, 255));
+        assert_eq!(
+            screen_ink(false, black, 255),
+            Color32::from_rgba_unmultiplied(0, 0, 0, 255)
+        );
         // Black pen on a dark page turns light, like the saved stroke.
         let dark = screen_ink(true, black, 128);
         assert_eq!(dark, Color32::from_rgba_unmultiplied(255, 255, 255, 128));

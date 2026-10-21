@@ -14,7 +14,16 @@ use crate::WordApp;
 use crate::theme::{Tokens, c32, regular, semibold};
 
 /// The picker's categories (`All` first), in the order shown.
-pub const CATEGORIES: [&str; 8] = ["All", "List", "Process", "Cycle", "Hierarchy", "Relationship", "Matrix", "Pyramid"];
+pub const CATEGORIES: [&str; 8] = [
+    "All",
+    "List",
+    "Process",
+    "Cycle",
+    "Hierarchy",
+    "Relationship",
+    "Matrix",
+    "Pyramid",
+];
 
 /// Insert › SmartArt: the category shown and the layout picked.
 #[derive(Clone, Debug, Serialize)]
@@ -26,34 +35,61 @@ pub struct SmartArtForm {
 
 impl SmartArtForm {
     pub fn new(_app: &WordApp) -> SmartArtForm {
-        SmartArtForm { category: "All".into(), layout: SmartArtLayout::default() }
+        SmartArtForm {
+            category: "All".into(),
+            layout: SmartArtLayout::default(),
+        }
     }
 
     /// The layouts the current category shows.
     pub fn shown(&self) -> Vec<SmartArtLayout> {
-        SmartArtLayout::ALL.into_iter().filter(|l| self.category == "All" || l.category() == self.category).collect()
+        SmartArtLayout::ALL
+            .into_iter()
+            .filter(|l| self.category == "All" || l.category() == self.category)
+            .collect()
     }
 }
 
 /// Theme accent `n` (1–6) of the document.
 pub fn accent(theme: &[Rgb], n: usize) -> Color32 {
-    theme.get(3 + n.clamp(1, 6)).map(|c| c32(*c)).unwrap_or(Color32::from_rgb(0x15, 0x60, 0x82))
+    theme
+        .get(3 + n.clamp(1, 6))
+        .map(|c| c32(*c))
+        .unwrap_or(Color32::from_rgb(0x15, 0x60, 0x82))
 }
 
 /// A small picture of `layout` in `r`, in the colours `colors` takes from `theme`; connector
 /// lines in `line`.
-pub fn preview(p: &Painter, r: Rect, layout: SmartArtLayout, colors: SmartArtColors, theme: &[Rgb], line: Color32) {
+pub fn preview(
+    p: &Painter,
+    r: Rect,
+    layout: SmartArtLayout,
+    colors: SmartArtColors,
+    theme: &[Rgb],
+    line: Color32,
+) {
     let r = r.shrink(r.width().min(r.height()) * 0.08);
     let s = r.width().min(r.height());
     let c = r.center();
     let col = |i: usize| accent(theme, colors.accent(i));
     // Unit-square coordinates (of the square in the middle of `r`) to screen.
     let at = |x: f32, y: f32| pos2(c.x + (x - 0.5) * s, c.y + (y - 0.5) * s);
-    let block = |x0: f32, y0: f32, x1: f32, y1: f32, k: usize, round: f32| p.rect_filled(Rect::from_min_max(at(x0, y0), at(x1, y1)), round, col(k));
+    let block = |x0: f32, y0: f32, x1: f32, y1: f32, k: usize, round: f32| {
+        p.rect_filled(Rect::from_min_max(at(x0, y0), at(x1, y1)), round, col(k))
+    };
     let thin = Stroke::new(1.0, line);
     match layout {
         SmartArtLayout::BasicList => {
-            for (k, (x, y)) in [(0.0, 0.18), (0.35, 0.18), (0.7, 0.18), (0.175, 0.55), (0.525, 0.55)].into_iter().enumerate() {
+            for (k, (x, y)) in [
+                (0.0, 0.18),
+                (0.35, 0.18),
+                (0.7, 0.18),
+                (0.175, 0.55),
+                (0.525, 0.55),
+            ]
+            .into_iter()
+            .enumerate()
+            {
                 block(x, y, x + 0.3, y + 0.27, k, 0.0);
             }
         }
@@ -92,13 +128,25 @@ pub fn preview(p: &Painter, r: Rect, layout: SmartArtLayout, colors: SmartArtCol
         SmartArtLayout::Pyramid => {
             // Half the pyramid's width at height `y` (apex at 0.05, base at 0.95).
             let hw = |y: f32| 0.45 * (y - 0.05) / 0.9;
-            for (k, (y0, y1)) in [(0.05, 0.37), (0.37, 0.66), (0.66, 0.95)].into_iter().enumerate() {
+            for (k, (y0, y1)) in [(0.05, 0.37), (0.37, 0.66), (0.66, 0.95)]
+                .into_iter()
+                .enumerate()
+            {
                 let pts = if k == 0 {
                     vec![at(0.5, y0), at(0.5 + hw(y1), y1), at(0.5 - hw(y1), y1)]
                 } else {
-                    vec![at(0.5 - hw(y0), y0), at(0.5 + hw(y0), y0), at(0.5 + hw(y1), y1), at(0.5 - hw(y1), y1)]
+                    vec![
+                        at(0.5 - hw(y0), y0),
+                        at(0.5 + hw(y0), y0),
+                        at(0.5 + hw(y1), y1),
+                        at(0.5 - hw(y1), y1),
+                    ]
                 };
-                p.add(egui::Shape::convex_polygon(pts, col(k), Stroke::new(1.0, line)));
+                p.add(egui::Shape::convex_polygon(
+                    pts,
+                    col(k),
+                    Stroke::new(1.0, line),
+                ));
             }
         }
         SmartArtLayout::Radial => {
@@ -143,10 +191,17 @@ pub fn colors_label(c: SmartArtColors) -> String {
 
 /// Swatches of a colour variant in `r`: the accents its shapes take.
 pub fn swatches(p: &Painter, r: Rect, colors: SmartArtColors, theme: &[Rgb]) {
-    let n = if colors == SmartArtColors::Colorful { 5 } else { 3 };
+    let n = if colors == SmartArtColors::Colorful {
+        5
+    } else {
+        3
+    };
     let w = r.width() / n as f32;
     for k in 0..n {
-        let cell = Rect::from_min_size(pos2(r.left() + k as f32 * w, r.top()), vec2(w - 2.0, r.height()));
+        let cell = Rect::from_min_size(
+            pos2(r.left() + k as f32 * w, r.top()),
+            vec2(w - 2.0, r.height()),
+        );
         p.rect_filled(cell, 2.0, accent(theme, colors.accent(k)));
     }
 }
@@ -186,74 +241,109 @@ pub fn picker_ui(app: &mut WordApp, ui: &mut Ui, f: &mut SmartArtForm) -> bool {
         ui.vertical(|ui| {
             ui.set_width(3.0 * 96.0 + 16.0);
             ui.set_min_height(2.0 * 96.0 + 8.0);
-            egui::Grid::new("smart_art_layouts").spacing(vec2(8.0, 8.0)).show(ui, |ui| {
-                for (k, layout) in f.shown().into_iter().enumerate() {
-                    let (rect, resp) = ui.allocate_exact_size(vec2(96.0, 96.0), Sense::click());
-                    let on = f.layout == layout;
-                    let fill = if on {
-                        t.checked
-                    } else if resp.hovered() {
-                        t.hover
-                    } else {
-                        t.input
-                    };
-                    ui.painter().rect(rect, 4.0, fill, Stroke::new(1.0, if on { t.accent } else { t.border }), egui::StrokeKind::Inside);
-                    preview(
-                        ui.painter(),
-                        Rect::from_min_size(rect.min + vec2(14.0, 4.0), vec2(68.0, 62.0)),
-                        layout,
-                        SmartArtColors::default(),
-                        &theme,
-                        t.text_dim,
-                    );
-                    // A label wider than the tile (a long translation) breaks at its middle space.
-                    let label = tl!(layout.label());
-                    let width = |text: &str| ui.ctx().fonts_mut(|f| f.layout_no_wrap(text.to_string(), regular(10.5), t.text).size().x);
-                    let lines = if width(label) <= rect.width() - 6.0 {
-                        vec![label.to_string()]
-                    } else {
-                        let split = label
-                            .match_indices(' ')
-                            .map(|(i, _)| (label[..i].to_string(), label[i + 1..].to_string()))
-                            .min_by(|a, b| width(&a.0).max(width(&a.1)).total_cmp(&width(&b.0).max(width(&b.1))));
-                        split.map_or_else(|| vec![label.to_string()], |(a, b)| vec![a, b])
-                    };
-                    for (n, line) in lines.iter().rev().enumerate() {
-                        ui.painter().text(
-                            pos2(rect.center().x, rect.bottom() - 11.0 - 12.5 * n as f32),
-                            egui::Align2::CENTER_CENTER,
-                            line,
-                            regular(10.5),
-                            t.text,
+            egui::Grid::new("smart_art_layouts")
+                .spacing(vec2(8.0, 8.0))
+                .show(ui, |ui| {
+                    for (k, layout) in f.shown().into_iter().enumerate() {
+                        let (rect, resp) = ui.allocate_exact_size(vec2(96.0, 96.0), Sense::click());
+                        let on = f.layout == layout;
+                        let fill = if on {
+                            t.checked
+                        } else if resp.hovered() {
+                            t.hover
+                        } else {
+                            t.input
+                        };
+                        ui.painter().rect(
+                            rect,
+                            4.0,
+                            fill,
+                            Stroke::new(1.0, if on { t.accent } else { t.border }),
+                            egui::StrokeKind::Inside,
                         );
+                        preview(
+                            ui.painter(),
+                            Rect::from_min_size(rect.min + vec2(14.0, 4.0), vec2(68.0, 62.0)),
+                            layout,
+                            SmartArtColors::default(),
+                            &theme,
+                            t.text_dim,
+                        );
+                        // A label wider than the tile (a long translation) breaks at its middle space.
+                        let label = tl!(layout.label());
+                        let width = |text: &str| {
+                            ui.ctx().fonts_mut(|f| {
+                                f.layout_no_wrap(text.to_string(), regular(10.5), t.text)
+                                    .size()
+                                    .x
+                            })
+                        };
+                        let lines = if width(label) <= rect.width() - 6.0 {
+                            vec![label.to_string()]
+                        } else {
+                            let split = label
+                                .match_indices(' ')
+                                .map(|(i, _)| (label[..i].to_string(), label[i + 1..].to_string()))
+                                .min_by(|a, b| {
+                                    width(&a.0)
+                                        .max(width(&a.1))
+                                        .total_cmp(&width(&b.0).max(width(&b.1)))
+                                });
+                            split.map_or_else(|| vec![label.to_string()], |(a, b)| vec![a, b])
+                        };
+                        for (n, line) in lines.iter().rev().enumerate() {
+                            ui.painter().text(
+                                pos2(rect.center().x, rect.bottom() - 11.0 - 12.5 * n as f32),
+                                egui::Align2::CENTER_CENTER,
+                                line,
+                                regular(10.5),
+                                t.text,
+                            );
+                        }
+                        let resp = resp.on_hover_text(label);
+                        if resp.clicked() {
+                            f.layout = layout;
+                        }
+                        if resp.double_clicked() {
+                            chosen = Some(layout);
+                        }
+                        if k % 3 == 2 {
+                            ui.end_row();
+                        }
                     }
-                    let resp = resp.on_hover_text(label);
-                    if resp.clicked() {
-                        f.layout = layout;
-                    }
-                    if resp.double_clicked() {
-                        chosen = Some(layout);
-                    }
-                    if k % 3 == 2 {
-                        ui.end_row();
-                    }
-                }
-            });
+                });
         });
         ui.separator();
         ui.vertical(|ui| {
             ui.set_width(200.0);
             let (rect, _) = ui.allocate_exact_size(vec2(200.0, 150.0), Sense::hover());
-            ui.painter().rect(rect, 4.0, t.input, Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
-            preview(ui.painter(), rect.shrink(10.0), f.layout, SmartArtColors::default(), &theme, t.text_dim);
+            ui.painter().rect(
+                rect,
+                4.0,
+                t.input,
+                Stroke::new(1.0, t.border),
+                egui::StrokeKind::Inside,
+            );
+            preview(
+                ui.painter(),
+                rect.shrink(10.0),
+                f.layout,
+                SmartArtColors::default(),
+                &theme,
+                t.text_dim,
+            );
             ui.add_space(6.0);
             ui.label(egui::RichText::new(tl!(f.layout.label())).font(semibold(13.0)));
             ui.add(egui::Label::new(tl!(f.layout.description())).wrap());
         });
     });
     let (ok, cancel) = crate::dialogs_insert::buttons(ui, "OK", "Cancel", true);
-    let Some(layout) = chosen.or(ok.then_some(f.layout)) else { return cancel };
-    app.run("insert.smartArt", json!({"layout": layout.id()})).is_ok() || cancel
+    let Some(layout) = chosen.or(ok.then_some(f.layout)) else {
+        return cancel;
+    };
+    app.run("insert.smartArt", json!({"layout": layout.id()}))
+        .is_ok()
+        || cancel
 }
 
 /// The `smartArt.items` params for `g` with item `i`'s text replaced by `text`.
@@ -278,7 +368,14 @@ pub fn items_without(g: &SmartArtSpec, i: usize) -> Value {
 
 /// The Text Pane button on the left edge of the selected graphic's frame, as in Word, while
 /// the pane is closed.
-pub fn frame_button(app: &mut WordApp, ctx: &egui::Context, layout: &wordcraft_layout::DocLayout, pages: &[Rect], scale: f32, clip: Rect) {
+pub fn frame_button(
+    app: &mut WordApp,
+    ctx: &egui::Context,
+    layout: &wordcraft_layout::DocLayout,
+    pages: &[Rect],
+    scale: f32,
+    clip: Rect,
+) {
     // The pane goes with the graphic: it opens again only on request.
     if wordcraft_engine::cmd::smart_art::selected_smart_art(&app.session).is_none() {
         app.session.view.smart_art_pane = false;
@@ -287,29 +384,49 @@ pub fn frame_button(app: &mut WordApp, ctx: &egui::Context, layout: &wordcraft_l
     if app.session.view.smart_art_pane {
         return;
     }
-    let Some((hit, _)) = crate::objects::active(app, layout) else { return };
-    let Some(page) = pages.get(hit.page) else { return };
+    let Some((hit, _)) = crate::objects::active(app, layout) else {
+        return;
+    };
+    let Some(page) = pages.get(hit.page) else {
+        return;
+    };
     let frame = crate::frame::to_screen(*page, scale, hit.rect);
     let at = pos2(frame.min.x - 28.0, frame.center().y - 14.0);
     if !clip.contains(at) {
         return;
     }
     let t = Tokens::get(ctx);
-    egui::Area::new(egui::Id::new("smart_art_frame_button")).order(egui::Order::Foreground).fixed_pos(at).show(ctx, |ui| {
-        egui::Frame::NONE.fill(t.panel).stroke(Stroke::new(1.0, t.border)).corner_radius(4).inner_margin(2).show(ui, |ui| {
-            if crate::widgets::icon_button(ui, "textPane", tl!("Text Pane")).clicked() {
-                let _ = app.run("smartArt.textPane", json!({"value": true}));
-            }
+    egui::Area::new(egui::Id::unique("smart_art_frame_button"))
+        .order(egui::Order::Foreground)
+        .fixed_pos(at)
+        .show(ctx, |ui| {
+            egui::Frame::NONE
+                .fill(t.panel)
+                .stroke(Stroke::new(1.0, t.border))
+                .corner_radius(4)
+                .inner_margin(2)
+                .show(ui, |ui| {
+                    if crate::widgets::icon_button(ui, "textPane", tl!("Text Pane")).clicked() {
+                        let _ = app.run("smartArt.textPane", json!({"value": true}));
+                    }
+                });
         });
-    });
 }
 
 /// Text typed with a SmartArt graphic selected goes at the end of its current item (the first,
 /// before any is picked), and the Text Pane opens, as Word does; it never replaces the graphic.
 /// False when no graphic is selected.
 pub fn type_into(app: &mut WordApp, typed: &str) -> bool {
-    let Some(g) = wordcraft_engine::cmd::smart_art::selected_smart_art(&app.session) else { return false };
-    let Some(i) = app.smart_art_item.filter(|i| *i < g.items.len()).or((!g.items.is_empty()).then_some(0)) else { return true };
+    let Some(g) = wordcraft_engine::cmd::smart_art::selected_smart_art(&app.session) else {
+        return false;
+    };
+    let Some(i) = app
+        .smart_art_item
+        .filter(|i| *i < g.items.len())
+        .or((!g.items.is_empty()).then_some(0))
+    else {
+        return true;
+    };
     let text = g.items.get(i).map_or(String::new(), |it| it.text.clone()) + typed;
     if app.smart_art_typing == Some(i) {
         app.session.join_next_undo();
@@ -325,47 +442,59 @@ pub fn type_into(app: &mut WordApp, typed: &str) -> bool {
 /// The Text Pane: a row per item, indented by level. Typing changes the graphic as you go (one
 /// undo step per item typed in); Enter adds an item after the current one.
 pub fn text_pane(app: &mut WordApp, ui: &mut Ui) {
-    let Some(g) = wordcraft_engine::cmd::smart_art::selected_smart_art(&app.session) else { return };
+    let Some(g) = wordcraft_engine::cmd::smart_art::selected_smart_art(&app.session) else {
+        return;
+    };
     let t = Tokens::get(ui.ctx());
     ui.label(egui::RichText::new(tl!("One line per item. Enter adds an item.")).color(t.text_dim));
     ui.add_space(4.0);
-    let focus_id = egui::Id::new("smart_art_focus");
+    let focus_id = egui::Id::unique("smart_art_focus");
     let want_focus: Option<usize> = ui.data_mut(|d| d.remove_temp(focus_id));
     let mut typed = false;
-    egui::ScrollArea::vertical().id_salt("smart_art_items").max_height((ui.available_height() - 40.0).max(60.0)).show(ui, |ui| {
-        for (i, it) in g.items.iter().enumerate() {
-            ui.horizontal(|ui| {
-                ui.add_space(f32::from(it.level) * 16.0);
-                ui.label(egui::RichText::new("•").color(t.text_dim));
-                let mut text = it.text.clone();
-                let r = ui.add(egui::TextEdit::singleline(&mut text).id_salt(("smart_art_item", i)).desired_width(f32::INFINITY));
-                if want_focus == Some(i) {
-                    r.request_focus();
-                }
-                if r.has_focus() || r.gained_focus() {
-                    app.smart_art_item = Some(i);
-                }
-                if r.changed() {
-                    typed = true;
-                    if app.smart_art_typing == Some(i) {
-                        app.session.join_next_undo();
+    egui::ScrollArea::vertical()
+        .id_salt("smart_art_items")
+        .max_height((ui.available_height() - 40.0).max(60.0))
+        .show(ui, |ui| {
+            for (i, it) in g.items.iter().enumerate() {
+                ui.horizontal(|ui| {
+                    ui.add_space(f32::from(it.level) * 16.0);
+                    ui.label(egui::RichText::new("•").color(t.text_dim));
+                    let mut text = it.text.clone();
+                    let r = ui.add(
+                        egui::TextEdit::singleline(&mut text)
+                            .id_salt(("smart_art_item", i))
+                            .desired_width(f32::INFINITY),
+                    );
+                    if want_focus == Some(i) {
+                        r.request_focus();
                     }
-                    if app.run("smartArt.items", items_with(&g, i, &text)).is_ok() {
-                        app.smart_art_typing = Some(i);
+                    if r.has_focus() || r.gained_focus() {
+                        app.smart_art_item = Some(i);
                     }
-                }
-                if r.lost_focus() && ui.input(|inp| inp.key_pressed(egui::Key::Enter)) && g.items.len() < MAX_ITEMS {
-                    app.smart_art_typing = None;
-                    if app.run("smartArt.addShape", json!({"after": i})).is_ok() {
-                        // The new item comes after this one and the items under it.
-                        let next = g.descendants(i).end;
-                        app.smart_art_item = Some(next);
-                        ui.data_mut(|d| d.insert_temp(focus_id, next));
+                    if r.changed() {
+                        typed = true;
+                        if app.smart_art_typing == Some(i) {
+                            app.session.join_next_undo();
+                        }
+                        if app.run("smartArt.items", items_with(&g, i, &text)).is_ok() {
+                            app.smart_art_typing = Some(i);
+                        }
                     }
-                }
-            });
-        }
-    });
+                    if r.lost_focus()
+                        && ui.input(|inp| inp.key_pressed(egui::Key::Enter))
+                        && g.items.len() < MAX_ITEMS
+                    {
+                        app.smart_art_typing = None;
+                        if app.run("smartArt.addShape", json!({"after": i})).is_ok() {
+                            // The new item comes after this one and the items under it.
+                            let next = g.descendants(i).end;
+                            app.smart_art_item = Some(next);
+                            ui.data_mut(|d| d.insert_temp(focus_id, next));
+                        }
+                    }
+                });
+            }
+        });
     if !typed && !ui.ctx().memory(|m| m.focused().is_some()) {
         app.smart_art_typing = None;
     }
@@ -373,7 +502,10 @@ pub fn text_pane(app: &mut WordApp, ui: &mut Ui) {
     let current = app.smart_art_item.filter(|i| *i < g.items.len());
     ui.horizontal_wrapped(|ui| {
         let at = current.map_or(json!({}), |i| json!({"after": i}));
-        if ui.add_enabled(g.items.len() < MAX_ITEMS, egui::Button::new(tl!("Add"))).clicked() {
+        if ui
+            .add_enabled(g.items.len() < MAX_ITEMS, egui::Button::new(tl!("Add")))
+            .clicked()
+        {
             app.smart_art_typing = None;
             let _ = app.run("smartArt.addShape", at);
         }
@@ -386,7 +518,12 @@ pub fn text_pane(app: &mut WordApp, ui: &mut Ui) {
             app.smart_art_typing = None;
             let _ = app.run("smartArt.demote", idx);
         }
-        if ui.add_enabled(current.is_some() && g.items.len() > 1, egui::Button::new(tl!("Remove"))).clicked()
+        if ui
+            .add_enabled(
+                current.is_some() && g.items.len() > 1,
+                egui::Button::new(tl!("Remove")),
+            )
+            .clicked()
             && let Some(i) = current
         {
             app.smart_art_typing = None;
@@ -405,7 +542,12 @@ mod tests {
     fn removing_an_item_lifts_the_items_under_it() {
         let g = SmartArtSpec::sample(SmartArtLayout::Hierarchy);
         let v = items_without(&g, 1);
-        let levels: Vec<u64> = v["items"].as_array().unwrap().iter().map(|i| i["level"].as_u64().unwrap()).collect();
+        let levels: Vec<u64> = v["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|i| i["level"].as_u64().unwrap())
+            .collect();
         assert_eq!(levels, [0, 1, 1, 2, 2]);
         assert_eq!(items_with(&g, 0, "Boss")["items"][0]["text"], "Boss");
     }
@@ -414,7 +556,10 @@ mod tests {
     #[test]
     fn the_picker_row_stays_within_its_height() {
         let ctx = egui::Context::default();
-        let input = egui::RawInput { screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(1920.0, 1080.0))), ..Default::default() };
+        let input = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(1920.0, 1080.0))),
+            ..Default::default()
+        };
         let mut height = f32::MAX;
         ctx.run_ui(input, |ui| {
             let top = ui.cursor().top();

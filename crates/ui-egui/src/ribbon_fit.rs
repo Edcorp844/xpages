@@ -52,7 +52,9 @@ pub fn plan(groups: &[GroupWidths], avail: f32) -> Vec<u8> {
             if total <= avail {
                 break;
             }
-            let (Some(g), Some(level)) = (groups.get(i), levels.get_mut(i)) else { continue };
+            let (Some(g), Some(level)) = (groups.get(i), levels.get_mut(i)) else {
+                continue;
+            };
             total += width(g, target) - width(g, *level);
             *level = target;
         }
@@ -93,24 +95,28 @@ struct Measured {
 }
 
 fn frame_id() -> Id {
-    Id::new("ribbon_fit_frame")
+    Id::unique("ribbon_fit_frame")
 }
 fn measured_id() -> Id {
-    Id::new("ribbon_fit_measured")
+    Id::unique("ribbon_fit_measured")
 }
 fn compact_id() -> Id {
-    Id::new("ribbon_fit_compact")
+    Id::unique("ribbon_fit_compact")
 }
 fn saving_id() -> Id {
-    Id::new("ribbon_fit_saving")
+    Id::unique("ribbon_fit_saving")
 }
 fn active_id() -> Id {
-    Id::new("ribbon_fit_active")
+    Id::unique("ribbon_fit_active")
 }
 
 /// What the measured widths depend on besides the groups themselves.
 fn signature(ctx: &Context) -> String {
-    format!("{}:{}", crate::i18n::current().code(), ctx.pixels_per_point())
+    format!(
+        "{}:{}",
+        crate::i18n::current().code(),
+        ctx.pixels_per_point()
+    )
 }
 
 /// Start drawing `tab` in a row `avail` points wide: plan the groups' levels.
@@ -120,7 +126,10 @@ pub fn begin(ctx: &Context, tab: &str, avail: f32) {
         let m = d.get_temp_mut_or_default::<Measured>(measured_id());
         if m.signature != sig {
             // Another language or scale: labels have new widths, so measure again.
-            *m = Measured { signature: sig, ..Default::default() };
+            *m = Measured {
+                signature: sig,
+                ..Default::default()
+            };
         }
         let titles = m.order.get(tab).cloned().unwrap_or_default();
         let groups: Vec<GroupWidths> = titles
@@ -128,14 +137,27 @@ pub fn begin(ctx: &Context, tab: &str, avail: f32) {
             .enumerate()
             .map(|(i, t)| GroupWidths {
                 title: t.clone(),
-                widths: [FULL, COMPACT, COLLAPSED].map(|l| m.widths.get(&(tab.to_string(), i, t.clone(), l)).copied()),
+                widths: [FULL, COMPACT, COLLAPSED]
+                    .map(|l| m.widths.get(&(tab.to_string(), i, t.clone(), l)).copied()),
             })
             .collect();
         (titles, groups)
     });
-    let levels = if groups.iter().all(|g| g.widths[0].is_some()) { plan(&groups, avail) } else { Vec::new() };
+    let levels = if groups.iter().all(|g| g.widths[0].is_some()) {
+        plan(&groups, avail)
+    } else {
+        Vec::new()
+    };
     ctx.data_mut(|d| {
-        d.insert_temp(frame_id(), Frame { tab: tab.to_string(), titles, levels, drawn: Vec::new() });
+        d.insert_temp(
+            frame_id(),
+            Frame {
+                tab: tab.to_string(),
+                titles,
+                levels,
+                drawn: Vec::new(),
+            },
+        );
         d.insert_temp(active_id(), true);
     });
 }
@@ -143,7 +165,8 @@ pub fn begin(ctx: &Context, tab: &str, avail: f32) {
 /// How many groups of this ribbon row are drawn so far: the next group's place, which tells apart
 /// groups that share a title (a custom group named like a built-in one).
 pub fn position(ctx: &Context) -> usize {
-    ctx.data(|d| d.get_temp::<Frame>(frame_id()).map(|f| f.drawn.len())).unwrap_or(0)
+    ctx.data(|d| d.get_temp::<Frame>(frame_id()).map(|f| f.drawn.len()))
+        .unwrap_or(0)
 }
 
 /// The level the next group, `title`, draws at this frame.
@@ -176,11 +199,14 @@ pub fn record(ctx: &Context, title: &str, level: u8, width: f32) {
             return;
         }
         let m = d.get_temp_mut_or_default::<Measured>(measured_id());
-        m.widths.insert((tab.clone(), i, title.to_string(), level), width);
+        m.widths
+            .insert((tab.clone(), i, title.to_string(), level), width);
         // Drawn as designed: until it is drawn compact, its compact width is what its labels and
         // gallery tiles would give back.
         if level == FULL && saving.is_finite() && saving > 0.0 {
-            m.widths.entry((tab, i, title.to_string(), COMPACT)).or_insert((width - saving).max(COLLAPSED_W));
+            m.widths
+                .entry((tab, i, title.to_string(), COMPACT))
+                .or_insert((width - saving).max(COLLAPSED_W));
         }
     });
 }
@@ -206,7 +232,8 @@ pub fn end(ctx: &Context) {
 
 /// Whether the group being drawn is compact (small buttons drop their labels).
 pub fn compact(ctx: &Context) -> bool {
-    ctx.data(|d| d.get_temp::<bool>(compact_id())).unwrap_or(false)
+    ctx.data(|d| d.get_temp::<bool>(compact_id()))
+        .unwrap_or(false)
 }
 
 /// Mark the group being drawn compact or not, and start counting what it could give up.
@@ -244,18 +271,28 @@ mod tests {
     use super::*;
 
     fn g(title: &str, full: f32, compact: Option<f32>, collapsed: Option<f32>) -> GroupWidths {
-        GroupWidths { title: title.into(), widths: [Some(full), compact, collapsed] }
+        GroupWidths {
+            title: title.into(),
+            widths: [Some(full), compact, collapsed],
+        }
     }
 
     #[test]
     fn everything_full_when_it_fits() {
-        let gs = [g("A", 100.0, Some(80.0), Some(60.0)), g("B", 100.0, Some(80.0), Some(60.0))];
+        let gs = [
+            g("A", 100.0, Some(80.0), Some(60.0)),
+            g("B", 100.0, Some(80.0), Some(60.0)),
+        ];
         assert_eq!(plan(&gs, 200.0), vec![FULL, FULL]);
     }
 
     #[test]
     fn rightmost_groups_compact_first_then_collapse() {
-        let gs = [g("A", 100.0, Some(80.0), Some(60.0)), g("B", 100.0, Some(80.0), Some(60.0)), g("C", 100.0, Some(80.0), Some(60.0))];
+        let gs = [
+            g("A", 100.0, Some(80.0), Some(60.0)),
+            g("B", 100.0, Some(80.0), Some(60.0)),
+            g("C", 100.0, Some(80.0), Some(60.0)),
+        ];
         // 300 → C compact (280) fits 285.
         assert_eq!(plan(&gs, 285.0), vec![FULL, FULL, COMPACT]);
         // All compact is 240; then C collapses (220) to fit 230.
@@ -301,7 +338,10 @@ mod tests {
 
     #[test]
     fn same_titles_keep_their_own_levels() {
-        let gs = [g("New Group", 300.0, Some(300.0), Some(60.0)), g("New Group", 100.0, Some(100.0), Some(60.0))];
+        let gs = [
+            g("New Group", 300.0, Some(300.0), Some(60.0)),
+            g("New Group", 100.0, Some(100.0), Some(60.0)),
+        ];
         assert_eq!(plan(&gs, 200.0), vec![COLLAPSED, FULL]);
     }
 
@@ -312,7 +352,10 @@ mod tests {
         // then fits as designed, is given back.
         assert_eq!(plan(&gs, 300.0), vec![FULL, COLLAPSED]);
         // Hostile numbers don't panic.
-        let odd = [g("X", f32::NAN, None, None), g("Y", f32::INFINITY, Some(f32::NAN), None)];
+        let odd = [
+            g("X", f32::NAN, None, None),
+            g("Y", f32::INFINITY, Some(f32::NAN), None),
+        ];
         let _ = plan(&odd, 100.0);
         let _ = plan(&odd, f32::NAN);
     }
@@ -328,16 +371,21 @@ mod ui_tests {
     use serde_json::json;
 
     fn harness(width: f32) -> egui_kittest::Harness<'static, WordApp> {
-        let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_engine::sample::sample_document()), crate::Services::default());
-        app.run("ui.tab", json!({"tab": "Home"})).unwrap();
-        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(width, 900.0)).build_ui_state(
-            |ui, app: &mut WordApp| {
-                let ctx = ui.ctx().clone();
-                app.logic(&ctx);
-                app.ui(ui);
-            },
-            app,
+        let mut app = WordApp::new(
+            wordcraft_engine::Session::new(wordcraft_engine::sample::sample_document()),
+            crate::Services::default(),
         );
+        app.run("ui.tab", json!({"tab": "Home"})).unwrap();
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(width, 900.0))
+            .build_ui_state(
+                |ui, app: &mut WordApp| {
+                    let ctx = ui.ctx().clone();
+                    app.logic(&ctx);
+                    app.ui(ui);
+                },
+                app,
+            );
         // Measure, plan, measure the planned levels, plan again.
         h.run_steps(8);
         h
@@ -370,29 +418,52 @@ mod ui_tests {
     #[test]
     fn collapsed_group_stays_open_and_runs_its_commands() {
         let mut h = harness(760.0);
-        assert_eq!(planned(&h.ctx, "Font"), Some(COLLAPSED), "Font folds at 760 pt");
-        h.state_mut().run("text.insert", json!({"text": "quiet words"})).unwrap();
+        assert_eq!(
+            planned(&h.ctx, "Font"),
+            Some(COLLAPSED),
+            "Font folds at 760 pt"
+        );
+        h.state_mut()
+            .run("text.insert", json!({"text": "quiet words"}))
+            .unwrap();
         h.state_mut().run("select.all", json!({})).unwrap();
         h.get_by_role_and_label(Role::Button, "Font").click();
         h.run_steps(3);
         let size = |h: &mut egui_kittest::Harness<'static, WordApp>| {
-            h.state_mut().session.run("format.state", &json!({})).ok().and_then(|v| v.get("size").and_then(serde_json::Value::as_f64))
+            h.state_mut()
+                .session
+                .run("format.state", &json!({}))
+                .ok()
+                .and_then(|v| v.get("size").and_then(serde_json::Value::as_f64))
         };
         let before = size(&mut h);
         click_shown(&h, "Increase Font Size");
         h.run_steps(3);
         assert_ne!(size(&mut h), before, "Increase Font Size ran");
-        assert!(shown(&h, "Change Case"), "the drop-down stays open after a click inside");
+        assert!(
+            shown(&h, "Change Case"),
+            "the drop-down stays open after a click inside"
+        );
         click_shown(&h, "Change Case");
         h.run_steps(3);
         // The item's accessible name carries its shortcut.
         h.get_by_label_contains("UPPERCASE").click();
         h.run_steps(3);
-        let text = h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body);
+        let text = h
+            .state()
+            .session
+            .doc
+            .plain_text(wordcraft_doc::StoryRef::Body);
         assert!(!text.chars().any(|c| c.is_lowercase()), "UPPERCASE ran");
-        assert!(shown(&h, "Increase Font Size"), "a menu inside counts as inside");
+        assert!(
+            shown(&h, "Increase Font Size"),
+            "a menu inside counts as inside"
+        );
         h.get_by_role_and_label(Role::Button, "Font").click();
         h.run_steps(3);
-        assert!(!shown(&h, "Increase Font Size"), "the button closes it again");
+        assert!(
+            !shown(&h, "Increase Font Size"),
+            "the button closes it again"
+        );
     }
 }

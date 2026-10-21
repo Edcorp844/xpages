@@ -1,5 +1,3 @@
-//! Bounded opening and native interpreter guards. App policy remains with callers.
-#[cfg(feature = "interpret")]
 use crate::interpret;
 use crate::syntax;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -42,14 +40,19 @@ pub struct OpenOptions {
 
 impl Default for OpenOptions {
     fn default() -> Self {
-        Self { max_input_bytes: MAX_INPUT_BYTES, decode_limits: syntax::DecodeLimits::default() }
+        Self {
+            max_input_bytes: MAX_INPUT_BYTES,
+            decode_limits: syntax::DecodeLimits::default(),
+        }
     }
 }
 
 /// Check a caller's input policy before allocation or invoking another reader.
 pub fn check_input_size_with(size: usize, options: &OpenOptions) -> Result<(), OpenError> {
     if size > options.max_input_bytes {
-        return Err(OpenError::InputLimit { limit: options.max_input_bytes });
+        return Err(OpenError::InputLimit {
+            limit: options.max_input_bytes,
+        });
     }
     Ok(())
 }
@@ -65,11 +68,21 @@ pub fn open(bytes: Arc<Vec<u8>>, password: Option<&str>) -> Result<syntax::Pdf, 
 }
 
 /// Open shared input with explicit immutable caller limits.
-pub fn open_with_options(bytes: Arc<Vec<u8>>, password: Option<&str>, options: &OpenOptions) -> Result<syntax::Pdf, OpenError> {
+pub fn open_with_options(
+    bytes: Arc<Vec<u8>>,
+    password: Option<&str>,
+    options: &OpenOptions,
+) -> Result<syntax::Pdf, OpenError> {
     check_input_size_with(bytes.len(), options)?;
-    catch_unwind(AssertUnwindSafe(|| syntax::Pdf::new_with_password_and_limits(bytes, password.unwrap_or(""), options.decode_limits)))
-        .map_err(|_| OpenError::BackendPanic)?
-        .map_err(OpenError::Load)
+    catch_unwind(AssertUnwindSafe(|| {
+        syntax::Pdf::new_with_password_and_limits(
+            bytes,
+            password.unwrap_or(""),
+            options.decode_limits,
+        )
+    }))
+    .map_err(|_| OpenError::BackendPanic)?
+    .map_err(OpenError::Load)
 }
 
 /// Copy a borrowed input only after checking its size and reserving its storage.
@@ -78,24 +91,29 @@ pub fn open_slice(bytes: &[u8], password: Option<&str>) -> Result<syntax::Pdf, O
 }
 
 /// Copy borrowed input after checking caller limits and reserving storage fallibly.
-pub fn open_slice_with_options(bytes: &[u8], password: Option<&str>, options: &OpenOptions) -> Result<syntax::Pdf, OpenError> {
+pub fn open_slice_with_options(
+    bytes: &[u8],
+    password: Option<&str>,
+    options: &OpenOptions,
+) -> Result<syntax::Pdf, OpenError> {
     check_input_size_with(bytes.len(), options)?;
     let mut owned = Vec::new();
-    owned.try_reserve_exact(bytes.len()).map_err(|_| OpenError::Allocation)?;
+    owned
+        .try_reserve_exact(bytes.len())
+        .map_err(|_| OpenError::Allocation)?;
     owned.extend_from_slice(bytes);
     open_with_options(Arc::new(owned), password, options)
 }
 
-/// A guarded page interpreter entry point for editable import and text devices.
-/// After an error the caller must discard the partially populated device and its cache.
-/// This catches native unwinding panics, not WASM aborts.
-#[cfg(feature = "interpret")]
 pub fn interpret_page<'a>(
     page: &'a syntax::page::Page<'a>,
     context: &mut interpret::Context<'a>,
     device: &mut impl interpret::Device<'a>,
 ) -> Result<(), ExecutionError> {
-    catch_unwind(AssertUnwindSafe(|| interpret::interpret_page(page, context, device))).map_err(|_| ExecutionError::BackendPanic)
+    catch_unwind(AssertUnwindSafe(|| {
+        interpret::interpret_page(page, context, device)
+    }))
+    .map_err(|_| ExecutionError::BackendPanic)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]

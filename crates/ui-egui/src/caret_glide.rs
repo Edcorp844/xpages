@@ -128,7 +128,11 @@ impl Default for CaretGlide {
 impl CaretGlide {
     /// A caret whose glides and fades take `secs` seconds (0 or less: it jumps and blinks hard).
     pub fn with_secs(secs: f64) -> Self {
-        let secs = if secs.is_finite() { secs.clamp(0.0, MAX_GLIDE_SECS) } else { GLIDE_SECS };
+        let secs = if secs.is_finite() {
+            secs.clamp(0.0, MAX_GLIDE_SECS)
+        } else {
+            GLIDE_SECS
+        };
         CaretGlide {
             secs,
             target: None,
@@ -161,13 +165,21 @@ impl CaretGlide {
         let sane = is_finite(f.target) && f.now.is_finite();
         if !(f.shown && sane) {
             self.reset();
-            return Look { bar: f.target, opacity: 0.0, moving: false };
+            return Look {
+                bar: f.target,
+                opacity: 0.0,
+                moving: false,
+            };
         }
         if self.secs <= 0.0 {
             // Animations off: in place, and on or off.
             self.glide = None;
             self.fade = None;
-            let opacity = if blink(f.since_blink, 0.0) > 0.5 { 1.0 } else { 0.0 };
+            let opacity = if blink(f.since_blink, 0.0) > 0.5 {
+                1.0
+            } else {
+                0.0
+            };
             return self.draw(f.target, f.target, opacity);
         }
         if !same_view {
@@ -178,13 +190,20 @@ impl CaretGlide {
         let moved = heading.is_none_or(|h| distance(h, f.target) >= MIN_MOVE);
         if edited && moved && (by_keys || by_pointer) {
             // A key or a click turns the caret on, from however visible it was.
-            self.fade = Some(FadeIn { from: was_opacity, started: f.now });
+            self.fade = Some(FadeIn {
+                from: was_opacity,
+                started: f.now,
+            });
             self.glide = match heading {
                 // Keys glide, from where the caret was heading (not from where it has got to).
                 Some(from) if by_keys && !by_pointer && same_view => {
                     let seen = f.viewport.expand(OFFSCREEN_SLACK);
                     let on_screen = |b: Bar| seen.intersects(Rect::from_two_pos(b[0], b[1]));
-                    (on_screen(from) && on_screen(f.target)).then_some(Glide { from, to: f.target, started: f.now })
+                    (on_screen(from) && on_screen(f.target)).then_some(Glide {
+                        from,
+                        to: f.target,
+                        started: f.now,
+                    })
                 }
                 _ => None,
             };
@@ -227,11 +246,19 @@ impl CaretGlide {
     }
 
     fn draw(&mut self, target: Bar, bar: Bar, opacity: f32) -> Look {
-        let opacity = if opacity.is_finite() { opacity.clamp(0.0, 1.0) } else { 1.0 };
+        let opacity = if opacity.is_finite() {
+            opacity.clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
         self.target = Some(target);
         self.drawn = Some(bar);
         self.opacity = opacity;
-        Look { bar, opacity, moving: self.glide.is_some() || self.fade.is_some() }
+        Look {
+            bar,
+            opacity,
+            moving: self.glide.is_some() || self.fade.is_some(),
+        }
     }
 
     /// The caret is on its way somewhere.
@@ -270,7 +297,11 @@ fn progress(now: f64, started: f64, secs: f64) -> Option<f32> {
 /// 7% of the time, nine tenths after half of it. For these control points the curve has a closed
 /// form: time is `u³` and distance `3u² − 2u³`.
 pub fn ease(s: f32) -> f32 {
-    let s = if s.is_finite() { s.clamp(0.0, 1.0) } else { 1.0 };
+    let s = if s.is_finite() {
+        s.clamp(0.0, 1.0)
+    } else {
+        1.0
+    };
     3.0 * s.powf(2.0 / 3.0) - 2.0 * s
 }
 
@@ -282,8 +313,16 @@ pub fn blink(since: f64, fade: f64) -> f32 {
         return 1.0;
     }
     let phase = since % (2.0 * BLINK_SECS);
-    let (into, turning_on) = if phase < BLINK_SECS { (phase, true) } else { (phase - BLINK_SECS, false) };
-    let done = if fade > 0.0 { (into / fade).clamp(0.0, 1.0) as f32 } else { 1.0 };
+    let (into, turning_on) = if phase < BLINK_SECS {
+        (phase, true)
+    } else {
+        (phase - BLINK_SECS, false)
+    };
+    let done = if fade > 0.0 {
+        (into / fade).clamp(0.0, 1.0) as f32
+    } else {
+        1.0
+    };
     if turning_on { done } else { 1.0 - done }
 }
 
@@ -322,7 +361,7 @@ fn parse_ms(value: Option<&str>) -> f64 {
 }
 
 fn state_id() -> egui::Id {
-    egui::Id::new("caret_glide")
+    egui::Id::unique("caret_glide")
 }
 
 /// What puts the caret where it is: the document's revision and the caret's position in it.
@@ -339,8 +378,17 @@ fn cause_key(app: &WordApp) -> u64 {
 /// How the document is shown: which document, the zoom and where the pages sit.
 fn view_key(app: &WordApp, geo: &Geometry) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
-    (app.session.document_id(), geo.scale.to_bits(), geo.cols, geo.size.x.to_bits()).hash(&mut h);
-    geo.rects.first().map(|r| (r.min.x.to_bits(), r.min.y.to_bits())).hash(&mut h);
+    (
+        app.session.document_id(),
+        geo.scale.to_bits(),
+        geo.cols,
+        geo.size.x.to_bits(),
+    )
+        .hash(&mut h);
+    geo.rects
+        .first()
+        .map(|r| (r.min.x.to_bits(), r.min.y.to_bits()))
+        .hash(&mut h);
     h.finish()
 }
 
@@ -348,20 +396,48 @@ fn view_key(app: &WordApp, geo: &Geometry) -> u64 {
 /// it is drawn at all, `since_ms` how long ago its blink was restarted and `on` what the plain
 /// on-and-off blink says. Returns where and how strongly to draw it. `content_origin` is the scrolled
 /// content's top-left on screen.
-pub fn look(app: &WordApp, ui: &Ui, content_origin: Pos2, geo: &Geometry, target: Bar, shown: bool, since_ms: f64, on: bool) -> Look {
+pub fn look(
+    app: &WordApp,
+    ui: &Ui,
+    content_origin: Pos2,
+    geo: &Geometry,
+    target: Bar,
+    shown: bool,
+    since_ms: f64,
+    on: bool,
+) -> Look {
     // Turned off in Options, Animation effects off (the setting, or the system's under "Use system
     // setting"), or egui's own switch for "no animations": the caret jumps and blinks on and off.
-    if !app.ui.caret_animation || !app.animations_on() || ui.style().animation_time <= 0.0 || glide_secs() <= 0.0 {
-        ui.ctx().data_mut(|d| d.get_temp_mut_or_default::<CaretGlide>(state_id()).reset());
-        return Look { bar: target, opacity: if on { 1.0 } else { 0.0 }, moving: false };
+    if !app.ui.caret_animation
+        || !app.animations_on()
+        || ui.style().animation_time <= 0.0
+        || glide_secs() <= 0.0
+    {
+        ui.ctx()
+            .data_mut(|d| d.get_temp_mut_or_default::<CaretGlide>(state_id()).reset());
+        return Look {
+            bar: target,
+            opacity: if on { 1.0 } else { 0.0 },
+            moving: false,
+        };
     }
     let off = content_origin.to_vec2();
     let since = since_ms / 1000.0;
     let (keys, pointer, now) = ui.input(|i| {
         let typed = |e: &egui::Event| {
-            matches!(e, egui::Event::Key { pressed: true, .. } | egui::Event::Text(_) | egui::Event::Paste(_) | egui::Event::Ime(_))
+            matches!(
+                e,
+                egui::Event::Key { pressed: true, .. }
+                    | egui::Event::Text(_)
+                    | egui::Event::Paste(_)
+                    | egui::Event::Ime(_)
+            )
         };
-        (i.events.iter().any(typed), i.pointer.any_down() || i.pointer.any_pressed() || i.pointer.any_released(), i.time)
+        (
+            i.events.iter().any(typed),
+            i.pointer.any_down() || i.pointer.any_pressed() || i.pointer.any_released(),
+            i.time,
+        )
     });
     let frame = Frame {
         target: [target[0] - off, target[1] - off],
@@ -380,19 +456,25 @@ pub fn look(app: &WordApp, ui: &Ui, content_origin: Pos2, geo: &Geometry, target
         (state.frame(frame), state.is_gliding(), state.secs)
     });
     // At rest the caller's own pixel-snapped bar is drawn, untouched.
-    look.bar = if gliding { [look.bar[0] + off, look.bar[1] + off] } else { target };
+    look.bar = if gliding {
+        [look.bar[0] + off, look.bar[1] + off]
+    } else {
+        target
+    };
     if look.moving {
         ui.ctx().request_repaint();
     } else if shown && blink_fading(since, secs) {
         // The blink's fade needs a handful of frames, not every one.
-        ui.ctx().request_repaint_after(std::time::Duration::from_millis(16));
+        ui.ctx()
+            .request_repaint_after(std::time::Duration::from_millis(16));
     }
     look
 }
 
 /// The caret's glide state this frame (for tests and tools).
 pub fn state(ctx: &egui::Context) -> CaretGlide {
-    ctx.data(|d| d.get_temp::<CaretGlide>(state_id())).unwrap_or_default()
+    ctx.data(|d| d.get_temp::<CaretGlide>(state_id()))
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -430,8 +512,20 @@ mod tests {
                 pointer: false,
                 since_blink: 0.0,
             };
-            let mut rig = Rig { glide: CaretGlide::with_secs(GLIDE_SECS), f, restarted: 100.0 };
-            assert_eq!(rig.glide.frame(rig.f), Look { bar: at, opacity: 1.0, moving: false }, "the first frame draws the caret in place");
+            let mut rig = Rig {
+                glide: CaretGlide::with_secs(GLIDE_SECS),
+                f,
+                restarted: 100.0,
+            };
+            assert_eq!(
+                rig.glide.frame(rig.f),
+                Look {
+                    bar: at,
+                    opacity: 1.0,
+                    moving: false
+                },
+                "the first frame draws the caret in place"
+            );
             rig
         }
 
@@ -485,10 +579,18 @@ mod tests {
     /// fractions of the way (the same for moves of 6 px and of 372 px).
     #[test]
     fn the_glide_follows_words_measured_curve() {
-        let measured = [0.369, 0.529, 0.640, 0.724, 0.790, 0.843, 0.885, 0.918, 0.945, 0.965, 0.980, 0.991, 0.997, 1.0];
+        let measured = [
+            0.369, 0.529, 0.640, 0.724, 0.790, 0.843, 0.885, 0.918, 0.945, 0.965, 0.980, 0.991,
+            0.997, 1.0,
+        ];
         for (k, want) in measured.iter().enumerate() {
             let s = (k + 1) as f32 * (1.0 / 144.0) / GLIDE_SECS as f32;
-            assert!((ease(s) - want).abs() < 0.004, "frame {}: {} vs measured {want}", k + 1, ease(s));
+            assert!(
+                (ease(s) - want).abs() < 0.004,
+                "frame {}: {} vs measured {want}",
+                k + 1,
+                ease(s)
+            );
         }
         assert_eq!((ease(0.0), ease(1.0)), (0.0, 1.0));
         assert!(ease(0.5) > 0.88, "nine tenths of the way in half the time");
@@ -506,16 +608,29 @@ mod tests {
         let mut r = Rig::new(bar(100.0, 50.0));
         r.key_to(bar(200.0, 90.0));
         let first = r.step(DT);
-        assert_eq!(first.bar, bar(100.0, 50.0), "the glide starts from where the caret was");
+        assert_eq!(
+            first.bar,
+            bar(100.0, 50.0),
+            "the glide starts from where the caret was"
+        );
         assert!(first.moving && r.glide.is_gliding());
         let mut last = 100.0;
         let mut frames = 0;
         while r.glide.is_gliding() {
             let look = r.step(DT);
             let b = look.bar;
-            assert!(b[0].x >= last && b[0].x <= 200.0, "moves toward the target without overshooting: {b:?}");
-            assert!((b[1].y - b[0].y - 16.0).abs() < 1e-3, "the bar keeps its height: {b:?}");
-            assert_eq!(look.opacity, 1.0, "a caret that was lit stays lit on the way");
+            assert!(
+                b[0].x >= last && b[0].x <= 200.0,
+                "moves toward the target without overshooting: {b:?}"
+            );
+            assert!(
+                (b[1].y - b[0].y - 16.0).abs() < 1e-3,
+                "the bar keeps its height: {b:?}"
+            );
+            assert_eq!(
+                look.opacity, 1.0,
+                "a caret that was lit stays lit on the way"
+            );
             last = b[0].x;
             frames += 1;
             assert!(frames < 60);
@@ -523,7 +638,15 @@ mod tests {
         assert_eq!(r.glide.drawn(), Some(bar(200.0, 90.0)));
         // 0.1 s at 60 Hz.
         assert!((5..=7).contains(&frames), "{frames} frames");
-        assert_eq!(r.step(DT), Look { bar: bar(200.0, 90.0), opacity: 1.0, moving: false }, "then it rests");
+        assert_eq!(
+            r.step(DT),
+            Look {
+                bar: bar(200.0, 90.0),
+                opacity: 1.0,
+                moving: false
+            },
+            "then it rests"
+        );
     }
 
     #[test]
@@ -540,8 +663,16 @@ mod tests {
             b[0].x
         };
         let expected = 300.0 * ease((0.05 / GLIDE_SECS) as f32);
-        assert!((at(60.0) - expected).abs() < 0.5, "{} vs {expected}", at(60.0));
-        assert!((at(240.0) - expected).abs() < 0.5, "{} vs {expected}", at(240.0));
+        assert!(
+            (at(60.0) - expected).abs() < 0.5,
+            "{} vs {expected}",
+            at(60.0)
+        );
+        assert!(
+            (at(240.0) - expected).abs() < 0.5,
+            "{} vs {expected}",
+            at(240.0)
+        );
     }
 
     /// Word: a second key before the caret arrives makes it snap to where it was heading and set
@@ -554,7 +685,11 @@ mod tests {
         let mid = r.step(DT * 2.0).bar;
         assert!(mid[0].x > 0.0 && mid[0].x < 100.0);
         r.key_to(bar(110.0, 0.0));
-        assert_eq!(r.step(DT).bar, bar(100.0, 0.0), "it snaps to the first move's end");
+        assert_eq!(
+            r.step(DT).bar,
+            bar(100.0, 0.0),
+            "it snaps to the first move's end"
+        );
         let next = r.step(DT).bar;
         assert!(next[0].x > 100.0 && next[0].x < 110.0);
         r.rest(0.2);
@@ -595,14 +730,28 @@ mod tests {
         assert_eq!(look.opacity, 1.0, "a lit caret stays lit");
         r.rest(0.2);
         r.script_to(bar(50.0, 50.0));
-        assert_eq!(r.step(DT), Look { bar: bar(50.0, 50.0), opacity: 1.0, moving: false });
+        assert_eq!(
+            r.step(DT),
+            Look {
+                bar: bar(50.0, 50.0),
+                opacity: 1.0,
+                moving: false
+            }
+        );
         // A script's move during a glide ends the glide.
         r.key_to(bar(250.0, 50.0));
         r.step(DT);
         r.step(DT);
         assert!(r.glide.is_gliding());
         r.script_to(bar(20.0, 20.0));
-        assert_eq!(r.step(DT), Look { bar: bar(20.0, 20.0), opacity: 1.0, moving: false });
+        assert_eq!(
+            r.step(DT),
+            Look {
+                bar: bar(20.0, 20.0),
+                opacity: 1.0,
+                moving: false
+            }
+        );
         // A click during a glide too.
         r.key_to(bar(250.0, 20.0));
         r.step(DT);
@@ -615,22 +764,49 @@ mod tests {
     #[test]
     fn the_blink_fades_and_a_move_turns_the_caret_on() {
         // On for 0.53 s, a 0.1 s fade out, off, a 0.1 s fade in.
-        assert_eq!((blink(0.0, 0.1), blink(0.3, 0.1), blink(0.529, 0.1)), (1.0, 1.0, 1.0));
+        assert_eq!(
+            (blink(0.0, 0.1), blink(0.3, 0.1), blink(0.529, 0.1)),
+            (1.0, 1.0, 1.0)
+        );
         assert!((blink(0.58, 0.1) - 0.5).abs() < 0.01);
         assert_eq!((blink(0.64, 0.1), blink(1.0, 0.1)), (0.0, 0.0));
         assert!((blink(1.06 + 0.025, 0.1) - 0.25).abs() < 0.01);
         assert_eq!(blink(1.3, 0.1), 1.0);
         assert!((blink(1.59 + 0.075, 0.1) - 0.25).abs() < 0.01);
-        assert!(blink_fading(0.55, 0.1) && blink_fading(1.1, 0.1) && !blink_fading(0.3, 0.1) && !blink_fading(0.8, 0.1) && !blink_fading(0.05, 0.1));
+        assert!(
+            blink_fading(0.55, 0.1)
+                && blink_fading(1.1, 0.1)
+                && !blink_fading(0.3, 0.1)
+                && !blink_fading(0.8, 0.1)
+                && !blink_fading(0.05, 0.1)
+        );
         // With no fade it is the plain on-and-off blink.
-        assert_eq!((blink(0.52, 0.0), blink(0.54, 0.0), blink(1.05, 0.0), blink(1.07, 0.0)), (1.0, 0.0, 0.0, 1.0));
-        assert_eq!((blink(f64::NAN, 0.1), blink(-5.0, 0.1), blink(f64::INFINITY, 0.1)), (1.0, 1.0, 1.0));
+        assert_eq!(
+            (
+                blink(0.52, 0.0),
+                blink(0.54, 0.0),
+                blink(1.05, 0.0),
+                blink(1.07, 0.0)
+            ),
+            (1.0, 0.0, 0.0, 1.0)
+        );
+        assert_eq!(
+            (
+                blink(f64::NAN, 0.1),
+                blink(-5.0, 0.1),
+                blink(f64::INFINITY, 0.1)
+            ),
+            (1.0, 1.0, 1.0)
+        );
 
         // At rest the caret fades out and back in.
         let mut r = Rig::new(bar(100.0, 100.0));
         assert_eq!(r.rest(0.4).opacity, 1.0);
         let fading = r.rest(0.18).opacity;
-        assert!(fading > 0.2 && fading < 0.8, "half-way through the fade out: {fading}");
+        assert!(
+            fading > 0.2 && fading < 0.8,
+            "half-way through the fade out: {fading}"
+        );
         assert_eq!(r.rest(0.2).opacity, 0.0);
         // A key while it is off: it fades in over the glide, evenly.
         r.key_to(bar(200.0, 100.0));
@@ -639,7 +815,10 @@ mod tests {
             seen.push(r.step(DT).opacity);
         }
         assert_eq!((seen[0], seen[seen.len() - 1]), (0.0, 1.0));
-        assert!(seen.windows(2).all(|w| w[1] >= w[0]) && seen[1] > 0.1 && seen[2] > seen[1], "{seen:?}");
+        assert!(
+            seen.windows(2).all(|w| w[1] >= w[0]) && seen[1] > 0.1 && seen[2] > seen[1],
+            "{seen:?}"
+        );
         assert!((seen[3] - 0.5).abs() < 0.02, "half lit half-way: {seen:?}");
         assert_eq!(r.step(DT).opacity, 1.0);
         // A click while it is off fades in too, in place.
@@ -647,15 +826,28 @@ mod tests {
         assert_eq!(r.glide.opacity(), 0.0);
         r.click_to(bar(300.0, 200.0));
         let look = r.step(DT);
-        assert_eq!((look.bar, look.opacity, look.moving), (bar(300.0, 200.0), 0.0, true));
+        assert_eq!(
+            (look.bar, look.opacity, look.moving),
+            (bar(300.0, 200.0), 0.0, true)
+        );
         let look = r.rest(0.05);
-        assert!(look.opacity > 0.3 && look.opacity < 0.7 && look.bar == bar(300.0, 200.0), "{look:?}");
+        assert!(
+            look.opacity > 0.3 && look.opacity < 0.7 && look.bar == bar(300.0, 200.0),
+            "{look:?}"
+        );
         assert_eq!(r.rest(0.1).opacity, 1.0);
         // A script's move while it is off: lit at once.
         r.rest(0.7);
         assert_eq!(r.glide.opacity(), 0.0);
         r.script_to(bar(10.0, 10.0));
-        assert_eq!(r.step(DT), Look { bar: bar(10.0, 10.0), opacity: 1.0, moving: false });
+        assert_eq!(
+            r.step(DT),
+            Look {
+                bar: bar(10.0, 10.0),
+                opacity: 1.0,
+                moving: false
+            }
+        );
         // A key while it is half faded: on from there.
         r.rest(0.56);
         let half = r.glide.opacity();
@@ -689,7 +881,10 @@ mod tests {
         let before = r.step(DT).bar;
         r.f.target = bar(140.0, 40.5);
         let after = r.step(DT).bar;
-        assert!(after[0].x > before[0].x && (after[0].y - 40.5).abs() < 1e-3, "{after:?}");
+        assert!(
+            after[0].x > before[0].x && (after[0].y - 40.5).abs() < 1e-3,
+            "{after:?}"
+        );
         r.rest(0.2);
         assert_eq!(r.glide.drawn(), Some(bar(140.0, 40.5)));
         // A view change during a glide ends it.
@@ -713,7 +908,10 @@ mod tests {
         r.key_to(bar(500.0, 100.0));
         let look = r.step(DT);
         assert_eq!(look.bar, bar(500.0, 100.0));
-        assert!(!r.glide.is_gliding() && look.moving, "it fades in where it is");
+        assert!(
+            !r.glide.is_gliding() && look.moving,
+            "it fades in where it is"
+        );
         r.rest(0.2);
         // The canvas skipped frames (Backstage open): no glide from the stale place.
         r.f.frame_nr += 30;
@@ -742,7 +940,14 @@ mod tests {
         off.glide = CaretGlide::with_secs(0.0);
         off.step(DT);
         off.key_to(bar(90.0, 0.0));
-        assert_eq!(off.step(DT), Look { bar: bar(90.0, 0.0), opacity: 1.0, moving: false });
+        assert_eq!(
+            off.step(DT),
+            Look {
+                bar: bar(90.0, 0.0),
+                opacity: 1.0,
+                moving: false
+            }
+        );
         assert_eq!(off.rest(0.5).opacity, 1.0);
         assert_eq!(off.rest(0.06).opacity, 0.0);
         assert_eq!(off.rest(0.5).opacity, 1.0);
@@ -773,7 +978,11 @@ mod tests {
         assert_eq!(r.step(-50.0).bar, bar(150.0, 10.0));
         r.key_to(bar(250.0, 10.0));
         r.step(DT);
-        assert_eq!(r.step(f64::NAN).opacity, 0.0, "a bad clock: nothing is drawn that frame");
+        assert_eq!(
+            r.step(f64::NAN).opacity,
+            0.0,
+            "a bad clock: nothing is drawn that frame"
+        );
         r.f.now = 200.0;
         r.key_to(bar(350.0, 10.0));
         r.step(DT);
@@ -799,36 +1008,56 @@ mod tests {
     }
 
     fn key(key: egui::Key) -> egui::Event {
-        egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() }
+        egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Default::default(),
+        }
     }
 
     /// The whole path: a key in the real app glides the drawn caret across the canvas; a command
     /// run by a script and a change of zoom don't.
     #[test]
     fn the_canvas_caret_glides_after_a_key() {
-        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
-        a.run("text.insert", json!({"text": "Some text here"})).unwrap();
+        let mut a = WordApp::new(
+            wordcraft_engine::Session::new(wordcraft_doc::Document::new()),
+            Default::default(),
+        );
+        a.run("text.insert", json!({"text": "Some text here"}))
+            .unwrap();
         // Animation effects off: the caret follows that switch.
         a.run("ui.animations", json!({"value": "off"})).unwrap();
-        let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).with_step_dt(DT as f32).build_ui_state(
-            |ui, app: &mut WordApp| {
-                let ctx = ui.ctx().clone();
-                app.logic(&ctx);
-                app.ui(ui);
-            },
-            a,
-        );
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(vec2(1440.0, 900.0))
+            .with_step_dt(DT as f32)
+            .build_ui_state(
+                |ui, app: &mut WordApp| {
+                    let ctx = ui.ctx().clone();
+                    app.logic(&ctx);
+                    app.ui(ui);
+                },
+                a,
+            );
         for _ in 0..3 {
             h.step();
         }
-        assert!(state(&h.ctx).drawn().is_none(), "no animations: the glide stands down");
-        h.state_mut().run("ui.animations", json!({"value": "on"})).unwrap();
+        assert!(
+            state(&h.ctx).drawn().is_none(),
+            "no animations: the glide stands down"
+        );
+        h.state_mut()
+            .run("ui.animations", json!({"value": "on"}))
+            .unwrap();
         h.ctx.all_styles_mut(|s| s.animation_time = 0.1);
         for _ in 0..30 {
             h.step();
         }
         let near = |a: Bar, b: Bar| distance(a, b) < 0.01;
-        let end = state(&h.ctx).drawn().expect("the focused canvas draws a caret");
+        let end = state(&h.ctx)
+            .drawn()
+            .expect("the focused canvas draws a caret");
         assert!(!state(&h.ctx).is_gliding());
         // Home: the caret glides to the start of the line.
         // (The canvas reads the key at the end of its frame; the caret sets off in the next.)
@@ -845,22 +1074,35 @@ mod tests {
         let start = state(&h.ctx).drawn().unwrap();
         assert!(!state(&h.ctx).is_gliding(), "and comes to rest");
         assert_eq!(h.state().session.sel.focus.off, 0, "Home moved the caret");
-        assert!(start[0].x + 20.0 < end[0].x, "to the start of the line: {start:?} from {end:?}");
-        assert!(x > start[0].x && x < end[0].x, "on the way it was drawn in between: {x}");
+        assert!(
+            start[0].x + 20.0 < end[0].x,
+            "to the start of the line: {start:?} from {end:?}"
+        );
+        assert!(
+            x > start[0].x && x < end[0].x,
+            "on the way it was drawn in between: {x}"
+        );
         // A command run by a script puts it there at once.
         h.state_mut().run("caret.docEnd", json!({})).unwrap();
         h.step();
         assert!(!state(&h.ctx).is_gliding());
-        assert!(near(state(&h.ctx).drawn().unwrap(), end), "back at the end of the text");
+        assert!(
+            near(state(&h.ctx).drawn().unwrap(), end),
+            "back at the end of the text"
+        );
         // Zooming moves the caret on screen but doesn't glide it.
-        h.state_mut().run("view.zoom", json!({"value": 150})).unwrap();
+        h.state_mut()
+            .run("view.zoom", json!({"value": 150}))
+            .unwrap();
         for _ in 0..3 {
             h.step();
             assert!(!state(&h.ctx).is_gliding());
         }
         assert!(!near(state(&h.ctx).drawn().unwrap(), end));
         // Turned off in Options: the caret jumps.
-        h.state_mut().run("ui.caretAnimation", json!({"value": false})).unwrap();
+        h.state_mut()
+            .run("ui.caretAnimation", json!({"value": false}))
+            .unwrap();
         h.step();
         assert!(state(&h.ctx).drawn().is_none(), "the animation stands down");
         h.event(key(egui::Key::Home));
@@ -868,9 +1110,15 @@ mod tests {
             h.step();
             assert!(!state(&h.ctx).is_gliding());
         }
-        assert_eq!(h.state().session.sel.focus.off, 0, "Home still moved the caret");
+        assert_eq!(
+            h.state().session.sel.focus.off,
+            0,
+            "Home still moved the caret"
+        );
         // And on again.
-        h.state_mut().run("ui.caretAnimation", json!({"value": true})).unwrap();
+        h.state_mut()
+            .run("ui.caretAnimation", json!({"value": true}))
+            .unwrap();
         h.step();
         assert!(state(&h.ctx).drawn().is_some());
     }

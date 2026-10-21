@@ -55,14 +55,27 @@ impl LevelForm {
     fn read(i: usize, v: &Value) -> LevelForm {
         let k = crate::options::unit().pt_per_unit();
         let s = |key: &str| v.get(key).and_then(Value::as_str).unwrap_or("").to_string();
-        let f = |key: &str| v.get(key).and_then(Value::as_f64).map(|x| x as f32 / k).filter(|x| x.is_finite());
+        let f = |key: &str| {
+            v.get(key)
+                .and_then(Value::as_f64)
+                .map(|x| x as f32 / k)
+                .filter(|x| x.is_finite())
+        };
         let restart_after = v.get("restartAfter").and_then(Value::as_u64);
         LevelForm {
             text: s("text"),
             format: s("format"),
-            start: v.get("start").and_then(Value::as_u64).unwrap_or(1).min(32_767) as u32,
+            start: v
+                .get("start")
+                .and_then(Value::as_u64)
+                .unwrap_or(1)
+                .min(32_767) as u32,
             restart: restart_after != Some(0),
-            restart_after: restart_after.filter(|r| *r > 0).map(|r| r.min(8) as u8).unwrap_or(i as u8).max(1),
+            restart_after: restart_after
+                .filter(|r| *r > 0)
+                .map(|r| r.min(8) as u8)
+                .unwrap_or(i as u8)
+                .max(1),
             style: s("style"),
             align: s("align"),
             aligned_at: f("alignedAt").unwrap_or(0.0),
@@ -114,9 +127,14 @@ impl ListForm {
     /// Starts from the caret's list, or from a new 1. a. i. list.
     pub fn read(app: &WordApp) -> ListForm {
         let s = &app.session;
-        let levels =
-            caret_list(s).and_then(|n| levels_of(s, n)).unwrap_or_else(|| wordcraft_doc::numbering::levels_for(wordcraft_doc::ListKind::Numbered));
-        let levels = (0..LEVELS).map(|i| LevelForm::read(i, &levels.get(i).map(level_json).unwrap_or(Value::Null))).collect();
+        let levels = caret_list(s)
+            .and_then(|n| levels_of(s, n))
+            .unwrap_or_else(|| {
+                wordcraft_doc::numbering::levels_for(wordcraft_doc::ListKind::Numbered)
+            });
+        let levels = (0..LEVELS)
+            .map(|i| LevelForm::read(i, &levels.get(i).map(level_json).unwrap_or(Value::Null)))
+            .collect();
         let mut styles: Vec<(String, String)> = s
             .doc
             .styles
@@ -126,7 +144,11 @@ impl ListForm {
             .map(|st| (st.id.clone(), st.name.clone()))
             .collect();
         styles.sort_by(|a, b| a.1.cmp(&b.1));
-        ListForm { levels, level: 0, styles }
+        ListForm {
+            levels,
+            level: 0,
+            styles,
+        }
     }
 
     /// `list.define` parameters for the whole list.
@@ -136,7 +158,9 @@ impl ListForm {
 
     /// The number level `k` shows with every level at its start value, as in the preview.
     pub fn sample(&self, k: usize) -> String {
-        let Some(l) = self.levels.get(k) else { return String::new() };
+        let Some(l) = self.levels.get(k) else {
+            return String::new();
+        };
         match l.format.as_str() {
             "none" => return String::new(),
             "bullet" => return l.text.clone(),
@@ -151,7 +175,12 @@ impl ListForm {
                 chars.next();
                 let j = (d as usize).saturating_sub(1).min(LEVELS - 1);
                 let lv = self.levels.get(j);
-                let fmt = if l.legal && j != k { NumFormat::Decimal } else { lv.map(|x| NumFormat::from_ooxml(&x.format)).unwrap_or_default() };
+                let fmt = if l.legal && j != k {
+                    NumFormat::Decimal
+                } else {
+                    lv.map(|x| NumFormat::from_ooxml(&x.format))
+                        .unwrap_or_default()
+                };
                 out.push_str(&fmt.format(lv.map(|x| x.start).unwrap_or(1).max(1)));
             } else {
                 out.push(c);
@@ -165,7 +194,11 @@ impl ListForm {
 pub fn define_list(app: &mut WordApp, ui: &mut Ui, f: &mut ListForm) -> bool {
     let unit = crate::options::unit();
     fn len(v: &mut f32, unit: wordcraft_geom::Unit) -> egui::DragValue<'_> {
-        egui::DragValue::new(v).speed(0.01).range(-10.0..=22.0).measure(unit).max_decimals(2)
+        egui::DragValue::new(v)
+            .speed(0.01)
+            .range(-10.0..=22.0)
+            .measure(unit)
+            .max_decimals(2)
     }
     let heading = |ui: &mut Ui, s: &str| {
         ui.add_space(4.0);
@@ -175,7 +208,10 @@ pub fn define_list(app: &mut WordApp, ui: &mut Ui, f: &mut ListForm) -> bool {
         ui.vertical(|ui| {
             ui.label(tl!("Click level to modify:"));
             for i in 0..LEVELS {
-                if ui.selectable_label(f.level == i, format!("{}", i + 1)).clicked() {
+                if ui
+                    .selectable_label(f.level == i, format!("{}", i + 1))
+                    .clicked()
+                {
                     f.level = i;
                 }
             }
@@ -187,106 +223,151 @@ pub fn define_list(app: &mut WordApp, ui: &mut Ui, f: &mut ListForm) -> bool {
     });
     let i = f.level.min(LEVELS - 1);
     let styles = f.styles.clone();
-    let Some(l) = f.levels.get_mut(i) else { return true };
+    let Some(l) = f.levels.get_mut(i) else {
+        return true;
+    };
     heading(ui, "Number format");
-    egui::Grid::new("mll_number").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
-        ui.label(tl!("Enter formatting for number:"));
-        ui.text_edit_singleline(&mut l.text);
-        ui.end_row();
-        ui.label(tl!("Number style for this level:"));
-        let current = STYLES.iter().find(|(k, _)| *k == l.format).map(|(_, s)| *s).unwrap_or("");
-        egui::ComboBox::from_id_salt("mll_style").selected_text(style_label(current)).show_ui(ui, |ui| {
-            for (k, s) in STYLES {
-                if ui.selectable_label(l.format == k, style_label(s)).clicked() {
-                    // A new style puts this level's number in the text if it had none (a bullet
-                    // its character).
-                    if k == "bullet" {
-                        l.text = "•".into();
-                    } else if l.format == "bullet" || !l.text.contains('%') {
-                        l.text = format!("%{}.", i + 1);
-                    }
-                    l.format = k.to_string();
-                }
-            }
-        });
-        ui.end_row();
-        if i > 0 {
-            ui.label(tl!("Include level number from:"));
-            egui::ComboBox::from_id_salt("mll_include").selected_text("").show_ui(ui, |ui| {
-                for k in 0..i {
-                    if ui.selectable_label(false, crate::i18n::fmt(tl!("Level {n}"), &[("n", &(k + 1).to_string())])).clicked() {
-                        l.text.push_str(&format!("%{}", k + 1));
-                    }
-                }
-            });
+    egui::Grid::new("mll_number")
+        .num_columns(2)
+        .spacing(vec2(10.0, 6.0))
+        .show(ui, |ui| {
+            ui.label(tl!("Enter formatting for number:"));
+            ui.text_edit_singleline(&mut l.text);
             ui.end_row();
-        }
-        ui.label(tl!("Start at:"));
-        ui.add(egui::DragValue::new(&mut l.start).range(0..=32_767));
-        ui.end_row();
-        if i > 0 {
-            ui.checkbox(&mut l.restart, tl!("Restart list after:"));
-            ui.add_enabled_ui(l.restart, |ui| {
-                let shown = crate::i18n::fmt(tl!("Level {n}"), &[("n", &l.restart_after.clamp(1, i as u8).to_string())]);
-                egui::ComboBox::from_id_salt("mll_restart").selected_text(shown).show_ui(ui, |ui| {
-                    for k in 1..=i as u8 {
-                        ui.selectable_value(&mut l.restart_after, k, crate::i18n::fmt(tl!("Level {n}"), &[("n", &k.to_string())]));
+            ui.label(tl!("Number style for this level:"));
+            let current = STYLES
+                .iter()
+                .find(|(k, _)| *k == l.format)
+                .map(|(_, s)| *s)
+                .unwrap_or("");
+            egui::ComboBox::from_id_salt("mll_style")
+                .selected_text(style_label(current))
+                .show_ui(ui, |ui| {
+                    for (k, s) in STYLES {
+                        if ui.selectable_label(l.format == k, style_label(s)).clicked() {
+                            // A new style puts this level's number in the text if it had none (a bullet
+                            // its character).
+                            if k == "bullet" {
+                                l.text = "•".into();
+                            } else if l.format == "bullet" || !l.text.contains('%') {
+                                l.text = format!("%{}.", i + 1);
+                            }
+                            l.format = k.to_string();
+                        }
                     }
                 });
+            ui.end_row();
+            if i > 0 {
+                ui.label(tl!("Include level number from:"));
+                egui::ComboBox::from_id_salt("mll_include")
+                    .selected_text("")
+                    .show_ui(ui, |ui| {
+                        for k in 0..i {
+                            if ui
+                                .selectable_label(
+                                    false,
+                                    crate::i18n::fmt(
+                                        tl!("Level {n}"),
+                                        &[("n", &(k + 1).to_string())],
+                                    ),
+                                )
+                                .clicked()
+                            {
+                                l.text.push_str(&format!("%{}", k + 1));
+                            }
+                        }
+                    });
+                ui.end_row();
+            }
+            ui.label(tl!("Start at:"));
+            ui.add(egui::DragValue::new(&mut l.start).range(0..=32_767));
+            ui.end_row();
+            if i > 0 {
+                ui.checkbox(&mut l.restart, tl!("Restart list after:"));
+                ui.add_enabled_ui(l.restart, |ui| {
+                    let shown = crate::i18n::fmt(
+                        tl!("Level {n}"),
+                        &[("n", &l.restart_after.clamp(1, i as u8).to_string())],
+                    );
+                    egui::ComboBox::from_id_salt("mll_restart")
+                        .selected_text(shown)
+                        .show_ui(ui, |ui| {
+                            for k in 1..=i as u8 {
+                                ui.selectable_value(
+                                    &mut l.restart_after,
+                                    k,
+                                    crate::i18n::fmt(tl!("Level {n}"), &[("n", &k.to_string())]),
+                                );
+                            }
+                        });
+                });
+                ui.end_row();
+            }
+            ui.label(tl!("Link level to style:"));
+            let shown = styles
+                .iter()
+                .find(|(id, _)| *id == l.style)
+                .map(|(_, n)| n.clone())
+                .unwrap_or_else(|| tl!("(no style)").to_string());
+            egui::ComboBox::from_id_salt("mll_link")
+                .selected_text(shown)
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut l.style, String::new(), tl!("(no style)"));
+                    for (id, name) in &styles {
+                        ui.selectable_value(&mut l.style, id.clone(), name);
+                    }
+                });
+            ui.end_row();
+            ui.label(tl!("Font:"));
+            ui.horizontal(|ui| {
+                ui.add(egui::TextEdit::singleline(&mut l.font).desired_width(110.0));
+                ui.checkbox(&mut l.bold, tl!("Bold"));
+                ui.checkbox(&mut l.italic, tl!("Italic"));
             });
             ui.end_row();
-        }
-        ui.label(tl!("Link level to style:"));
-        let shown = styles.iter().find(|(id, _)| *id == l.style).map(|(_, n)| n.clone()).unwrap_or_else(|| tl!("(no style)").to_string());
-        egui::ComboBox::from_id_salt("mll_link").selected_text(shown).show_ui(ui, |ui| {
-            ui.selectable_value(&mut l.style, String::new(), tl!("(no style)"));
-            for (id, name) in &styles {
-                ui.selectable_value(&mut l.style, id.clone(), name);
-            }
+            ui.label("");
+            ui.checkbox(&mut l.legal, tl!("Legal style numbering"));
+            ui.end_row();
         });
-        ui.end_row();
-        ui.label(tl!("Font:"));
-        ui.horizontal(|ui| {
-            ui.add(egui::TextEdit::singleline(&mut l.font).desired_width(110.0));
-            ui.checkbox(&mut l.bold, tl!("Bold"));
-            ui.checkbox(&mut l.italic, tl!("Italic"));
-        });
-        ui.end_row();
-        ui.label("");
-        ui.checkbox(&mut l.legal, tl!("Legal style numbering"));
-        ui.end_row();
-    });
     heading(ui, "Position");
-    egui::Grid::new("mll_position").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
-        ui.label(tl!("Number alignment:"));
-        ui.horizontal(|ui| {
-            for (v, s) in [("left", "Left"), ("center", "Center"), ("right", "Right")] {
-                ui.radio_value(&mut l.align, v.to_string(), tl!(s));
-            }
+    egui::Grid::new("mll_position")
+        .num_columns(2)
+        .spacing(vec2(10.0, 6.0))
+        .show(ui, |ui| {
+            ui.label(tl!("Number alignment:"));
+            ui.horizontal(|ui| {
+                for (v, s) in [("left", "Left"), ("center", "Center"), ("right", "Right")] {
+                    ui.radio_value(&mut l.align, v.to_string(), tl!(s));
+                }
+            });
+            ui.end_row();
+            ui.label(tl!("Aligned at:"));
+            ui.add(len(&mut l.aligned_at, unit));
+            ui.end_row();
+            ui.label(tl!("Text indent at:"));
+            ui.add(len(&mut l.indent_at, unit));
+            ui.end_row();
+            ui.label(tl!("Follow number with:"));
+            let follow = |k: &str| match k {
+                "space" => tl!("Space"),
+                "nothing" => tl!("Nothing"),
+                _ => tl!("Tab character"),
+            };
+            egui::ComboBox::from_id_salt("mll_follow")
+                .selected_text(follow(&l.follow))
+                .show_ui(ui, |ui| {
+                    for k in ["tab", "space", "nothing"] {
+                        ui.selectable_value(&mut l.follow, k.to_string(), follow(k));
+                    }
+                });
+            ui.end_row();
+            ui.add_enabled(
+                l.follow == "tab",
+                egui::Checkbox::new(&mut l.tab_on, tl!("Add tab stop at:")),
+            );
+            ui.add_enabled(l.follow == "tab" && l.tab_on, len(&mut l.tab_at, unit));
+            ui.end_row();
         });
-        ui.end_row();
-        ui.label(tl!("Aligned at:"));
-        ui.add(len(&mut l.aligned_at, unit));
-        ui.end_row();
-        ui.label(tl!("Text indent at:"));
-        ui.add(len(&mut l.indent_at, unit));
-        ui.end_row();
-        ui.label(tl!("Follow number with:"));
-        let follow = |k: &str| match k {
-            "space" => tl!("Space"),
-            "nothing" => tl!("Nothing"),
-            _ => tl!("Tab character"),
-        };
-        egui::ComboBox::from_id_salt("mll_follow").selected_text(follow(&l.follow)).show_ui(ui, |ui| {
-            for k in ["tab", "space", "nothing"] {
-                ui.selectable_value(&mut l.follow, k.to_string(), follow(k));
-            }
-        });
-        ui.end_row();
-        ui.add_enabled(l.follow == "tab", egui::Checkbox::new(&mut l.tab_on, tl!("Add tab stop at:")));
-        ui.add_enabled(l.follow == "tab" && l.tab_on, len(&mut l.tab_at, unit));
-        ui.end_row();
-    });
     let (ok, cancel) = buttons(ui, tl!("OK"));
     if ok && let Err(e) = app.run("list.define", f.params()) {
         app.status(e);
@@ -310,7 +391,12 @@ fn preview(ui: &mut Ui, f: &ListForm) {
     let (rect, _) = ui.allocate_exact_size(vec2(300.0, row * LEVELS as f32 + 8.0), Sense::hover());
     let p = ui.painter_at(rect);
     p.rect_filled(rect, 2.0, egui::Color32::WHITE);
-    p.rect_stroke(rect, 2.0, egui::Stroke::new(1.0, t.border_strong), egui::StrokeKind::Inside);
+    p.rect_stroke(
+        rect,
+        2.0,
+        egui::Stroke::new(1.0, t.border_strong),
+        egui::StrokeKind::Inside,
+    );
     let k = crate::options::unit().pt_per_unit();
     // Positions in points, scaled so 4.5 inches fit.
     let scale = (rect.width() - 16.0) / 324.0;
@@ -318,7 +404,11 @@ fn preview(ui: &mut Ui, f: &ListForm) {
     for (i, l) in f.levels.iter().enumerate() {
         let y = rect.top() + 4.0 + row * i as f32 + row / 2.0;
         let on = i == f.level;
-        let ink = if on { egui::Color32::BLACK } else { egui::Color32::from_gray(150) };
+        let ink = if on {
+            egui::Color32::BLACK
+        } else {
+            egui::Color32::from_gray(150)
+        };
         let label = f.sample(i);
         let font = egui::FontId::proportional(10.5);
         let galley = p.layout_no_wrap(label, font, ink);
@@ -335,9 +425,20 @@ fn preview(ui: &mut Ui, f: &ListForm) {
             "nothing" => nx + w,
             _ => x_of(l.indent_at).max(nx + w + 2.0),
         };
-        let bar = egui::Rect::from_min_max(egui::pos2(tx, y - 2.0), egui::pos2(rect.right() - 8.0, y + 2.0));
+        let bar = egui::Rect::from_min_max(
+            egui::pos2(tx, y - 2.0),
+            egui::pos2(rect.right() - 8.0, y + 2.0),
+        );
         if bar.width() > 0.0 {
-            p.rect_filled(bar, 1.0, if on { egui::Color32::from_gray(120) } else { egui::Color32::from_gray(205) });
+            p.rect_filled(
+                bar,
+                1.0,
+                if on {
+                    egui::Color32::from_gray(120)
+                } else {
+                    egui::Color32::from_gray(205)
+                },
+            );
         }
     }
 }
@@ -372,7 +473,11 @@ impl TrackForm {
     pub fn read(app: &WordApp) -> TrackForm {
         let v = wordcraft_engine::cmd::review::tracking_json(&app.session.prefs.markup);
         let s = |k: &str| v.get(k).and_then(Value::as_str).unwrap_or("").to_string();
-        let c = |k: &str| wordcraft_doc::Rgb::parse(&s(k)).map(|c| c.hex()).unwrap_or_default();
+        let c = |k: &str| {
+            wordcraft_doc::Rgb::parse(&s(k))
+                .map(|c| c.hex())
+                .unwrap_or_default()
+        };
         let b = |k: &str| v.get(k).and_then(Value::as_bool).unwrap_or(true);
         TrackForm {
             comments: b("comments"),
@@ -397,7 +502,13 @@ impl TrackForm {
 
     /// `review.trackingOptions` parameters.
     pub fn params(&self) -> Value {
-        let or = |c: &str, auto: &str| if c.is_empty() { auto.to_string() } else { c.to_string() };
+        let or = |c: &str, auto: &str| {
+            if c.is_empty() {
+                auto.to_string()
+            } else {
+                c.to_string()
+            }
+        };
         json!({
             "comments": self.comments,
             "ink": self.ink,
@@ -422,19 +533,34 @@ impl TrackForm {
 
 /// A choice from `options` ((value, label)) in a drop-down.
 fn choice(ui: &mut Ui, id: &str, value: &mut String, options: &[(&str, &str)]) {
-    let label = |k: &str| options.iter().find(|(v, _)| *v == k).map(|(_, l)| tl!(l).to_string()).unwrap_or_default();
-    egui::ComboBox::from_id_salt(id).selected_text(label(value)).width(150.0).show_ui(ui, |ui| {
-        for (v, l) in options {
-            ui.selectable_value(value, v.to_string(), tl!(l));
-        }
-    });
+    let label = |k: &str| {
+        options
+            .iter()
+            .find(|(v, _)| *v == k)
+            .map(|(_, l)| tl!(l).to_string())
+            .unwrap_or_default()
+    };
+    egui::ComboBox::from_id_salt(id)
+        .selected_text(label(value))
+        .width(150.0)
+        .show_ui(ui, |ui| {
+            for (v, l) in options {
+                ui.selectable_value(value, v.to_string(), tl!(l));
+            }
+        });
 }
 
 /// A colour: `none_label` (by author, or `auto` when given) or a colour from the grid. `value` is
 /// hex.
-fn color(ui: &mut Ui, theme: &[wordcraft_doc::Rgb], value: &mut String, none_label: &str, auto: Option<wordcraft_doc::Rgb>) {
+fn color(
+    ui: &mut Ui,
+    theme: &[wordcraft_doc::Rgb],
+    value: &mut String,
+    none_label: &str,
+    auto: Option<wordcraft_doc::Rgb>,
+) {
     ui.horizontal(|ui| {
-        let id = ui.id().with("colorField");
+        let id = ui.scope_id().with("colorField");
         crate::colors::take_field(ui.ctx(), id, value);
         let c = wordcraft_doc::Rgb::parse(value);
         let (r, _) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::hover());
@@ -447,13 +573,29 @@ fn color(ui: &mut Ui, theme: &[wordcraft_doc::Rgb], value: &mut String, none_lab
             None => {
                 for (k, a) in [0u32, 1, 2].iter().enumerate() {
                     let w = r.width() / 3.0;
-                    let part = egui::Rect::from_min_size(r.min + vec2(w * k as f32, 0.0), vec2(w, r.height()));
-                    ui.painter().rect_filled(part, 0.0, crate::theme::c32(wordcraft_layout::display::revision_color(*a)));
+                    let part = egui::Rect::from_min_size(
+                        r.min + vec2(w * k as f32, 0.0),
+                        vec2(w, r.height()),
+                    );
+                    ui.painter().rect_filled(
+                        part,
+                        0.0,
+                        crate::theme::c32(wordcraft_layout::display::revision_color(*a)),
+                    );
                 }
             }
         }
-        ui.painter().rect_stroke(r, 2.0, egui::Stroke::new(1.0, t.border_strong), egui::StrokeKind::Inside);
-        let label = if c.is_some() { value.clone() } else { tl!(none_label).to_string() };
+        ui.painter().rect_stroke(
+            r,
+            2.0,
+            egui::Stroke::new(1.0, t.border_strong),
+            egui::StrokeKind::Inside,
+        );
+        let label = if c.is_some() {
+            value.clone()
+        } else {
+            tl!(none_label).to_string()
+        };
         ui.menu_button(label, |ui| {
             if ui.button(tl!(none_label)).clicked() {
                 value.clear();
@@ -510,57 +652,87 @@ pub fn track_options(app: &mut WordApp, ui: &mut Ui, f: &mut TrackForm) -> bool 
         ui.label(egui::RichText::new(tl!(s)).font(semibold(12.5)));
     };
     heading(ui, "Show");
-    egui::Grid::new("tco_show").num_columns(2).spacing(vec2(16.0, 4.0)).show(ui, |ui| {
-        ui.checkbox(&mut f.comments, tl!("Comments"));
-        ui.checkbox(&mut f.ink, tl!("Ink"));
-        ui.end_row();
-        ui.checkbox(&mut f.insertions_deletions, tl!("Insertions and Deletions"));
-        ui.checkbox(&mut f.formatting, tl!("Formatting"));
-        ui.end_row();
-    });
+    egui::Grid::new("tco_show")
+        .num_columns(2)
+        .spacing(vec2(16.0, 4.0))
+        .show(ui, |ui| {
+            ui.checkbox(&mut f.comments, tl!("Comments"));
+            ui.checkbox(&mut f.ink, tl!("Ink"));
+            ui.end_row();
+            ui.checkbox(&mut f.insertions_deletions, tl!("Insertions and Deletions"));
+            ui.checkbox(&mut f.formatting, tl!("Formatting"));
+            ui.end_row();
+        });
     heading(ui, "Balloons");
     for (v, l) in [
         ("revisions", "Show revisions in balloons"),
         ("inline", "Show all revisions inline"),
-        ("commentsAndFormatting", "Show only comments and formatting in balloons"),
+        (
+            "commentsAndFormatting",
+            "Show only comments and formatting in balloons",
+        ),
     ] {
         ui.radio_value(&mut f.balloons, v.to_string(), tl!(l));
     }
     heading(ui, "Comments");
-    for (v, l) in [("margin", "In the margin"), ("selected", "Only for the selected text")] {
+    for (v, l) in [
+        ("margin", "In the margin"),
+        ("selected", "Only for the selected text"),
+    ] {
         ui.radio_value(&mut f.comment_display, v.to_string(), tl!(l));
     }
     heading(ui, "Advanced");
-    egui::Grid::new("tco_advanced").num_columns(3).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
-        ui.label(tl!("Insertions:"));
-        choice(ui, "tco_ins", &mut f.insert_mark, INSERT_MARKS);
-        color(ui, &theme, &mut f.insert_color, "By author", None);
-        ui.end_row();
-        ui.label(tl!("Deletions:"));
-        choice(ui, "tco_del", &mut f.delete_mark, DELETE_MARKS);
-        color(ui, &theme, &mut f.delete_color, "By author", None);
-        ui.end_row();
-        ui.label(tl!("Changed lines:"));
-        choice(
-            ui,
-            "tco_bar",
-            &mut f.changed_lines,
-            &[("outside", "Outside border"), ("left", "Left border"), ("right", "Right border"), ("none", "None")],
-        );
-        color(ui, &theme, &mut f.changed_lines_color, "Automatic", Some(wordcraft_layout::display::CHANGE_BAR));
-        ui.end_row();
-    });
+    egui::Grid::new("tco_advanced")
+        .num_columns(3)
+        .spacing(vec2(10.0, 6.0))
+        .show(ui, |ui| {
+            ui.label(tl!("Insertions:"));
+            choice(ui, "tco_ins", &mut f.insert_mark, INSERT_MARKS);
+            color(ui, &theme, &mut f.insert_color, "By author", None);
+            ui.end_row();
+            ui.label(tl!("Deletions:"));
+            choice(ui, "tco_del", &mut f.delete_mark, DELETE_MARKS);
+            color(ui, &theme, &mut f.delete_color, "By author", None);
+            ui.end_row();
+            ui.label(tl!("Changed lines:"));
+            choice(
+                ui,
+                "tco_bar",
+                &mut f.changed_lines,
+                &[
+                    ("outside", "Outside border"),
+                    ("left", "Left border"),
+                    ("right", "Right border"),
+                    ("none", "None"),
+                ],
+            );
+            color(
+                ui,
+                &theme,
+                &mut f.changed_lines_color,
+                "Automatic",
+                Some(wordcraft_layout::display::CHANGE_BAR),
+            );
+            ui.end_row();
+        });
     heading(ui, "Moves");
-    egui::Grid::new("tco_moves").num_columns(3).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
-        ui.label(tl!("Moved from:"));
-        choice(ui, "tco_move_from", &mut f.move_from_mark, DELETE_MARKS);
-        ui.push_id("tco_move_from_color", |ui| color(ui, &theme, &mut f.move_from_color, "By author", None));
-        ui.end_row();
-        ui.label(tl!("Moved to:"));
-        choice(ui, "tco_move_to", &mut f.move_to_mark, MOVE_TO_MARKS);
-        ui.push_id("tco_move_to_color", |ui| color(ui, &theme, &mut f.move_to_color, "By author", None));
-        ui.end_row();
-    });
+    egui::Grid::new("tco_moves")
+        .num_columns(3)
+        .spacing(vec2(10.0, 6.0))
+        .show(ui, |ui| {
+            ui.label(tl!("Moved from:"));
+            choice(ui, "tco_move_from", &mut f.move_from_mark, DELETE_MARKS);
+            ui.push_id("tco_move_from_color", |ui| {
+                color(ui, &theme, &mut f.move_from_color, "By author", None)
+            });
+            ui.end_row();
+            ui.label(tl!("Moved to:"));
+            choice(ui, "tco_move_to", &mut f.move_to_mark, MOVE_TO_MARKS);
+            ui.push_id("tco_move_to_color", |ui| {
+                color(ui, &theme, &mut f.move_to_color, "By author", None)
+            });
+            ui.end_row();
+        });
     ui.add_space(4.0);
     ui.checkbox(&mut f.track_formatting, tl!("Track formatting"));
     let (ok, cancel) = buttons(ui, tl!("OK"));
@@ -579,7 +751,10 @@ mod tests {
     use crate::{Services, WordApp};
 
     fn app() -> WordApp {
-        WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default())
+        WordApp::new(
+            Session::new(wordcraft_doc::Document::new()),
+            Services::default(),
+        )
     }
 
     /// #328: the ribbon opens Define New Multilevel List; OK defines the list and numbers the
@@ -588,22 +763,42 @@ mod tests {
     fn define_new_multilevel_list_opens_from_the_ribbon_and_applies() {
         let mut a = app();
         a.run("text.insert", json!({"text": "Intro"})).unwrap();
-        assert_eq!(a.run("list.define", json!({})).unwrap(), json!({"pending": "defineList"}));
-        let Some(Dialog::DefineList { form }) = &mut a.dialog else { panic!("dialog") };
-        assert_eq!((form.levels.len(), form.sample(0), form.sample(1)), (9, "1.".to_string(), "a.".to_string()));
+        assert_eq!(
+            a.run("list.define", json!({})).unwrap(),
+            json!({"pending": "defineList"})
+        );
+        let Some(Dialog::DefineList { form }) = &mut a.dialog else {
+            panic!("dialog")
+        };
+        assert_eq!(
+            (form.levels.len(), form.sample(0), form.sample(1)),
+            (9, "1.".to_string(), "a.".to_string())
+        );
         form.levels[0].text = "Part %1:".into();
         form.levels[0].format = "upperRoman".into();
         form.levels[1].text = "%1.%2".into();
         form.levels[1].legal = true;
-        assert_eq!((form.sample(0), form.sample(1)), ("Part I:".to_string(), "1.a".to_string()), "legal shows levels above in digits");
+        assert_eq!(
+            (form.sample(0), form.sample(1)),
+            ("Part I:".to_string(), "1.a".to_string()),
+            "legal shows levels above in digits"
+        );
         let params = form.params();
         a.dialog = None;
         a.run("list.define", params).unwrap();
         let got = a.session.run("list.get", &json!({})).unwrap();
-        assert_eq!((got["levels"][0]["text"].as_str(), got["levels"][0]["format"].as_str()), (Some("Part %1:"), Some("upperRoman")));
+        assert_eq!(
+            (
+                got["levels"][0]["text"].as_str(),
+                got["levels"][0]["format"].as_str()
+            ),
+            (Some("Part %1:"), Some("upperRoman"))
+        );
         // Opening it again starts from the caret's list.
         a.run("ui.dialog", json!({"name": "defineList"})).unwrap();
-        assert!(matches!(&a.dialog, Some(Dialog::DefineList { form }) if form.sample(0) == "Part I:"));
+        assert!(
+            matches!(&a.dialog, Some(Dialog::DefineList { form }) if form.sample(0) == "Part I:")
+        );
         let mut b = app();
         assert!(b.execute("list.define", json!({})).is_err());
         assert!(b.dialog.is_none());
@@ -614,10 +809,25 @@ mod tests {
     #[test]
     fn track_changes_options_open_from_the_launcher_and_persist() {
         let mut a = app();
-        assert_eq!(a.run("review.trackingOptions", json!({})).unwrap(), json!({"pending": "trackChangesOptions"}));
-        let Some(Dialog::TrackOptions { form }) = &mut a.dialog else { panic!("dialog") };
-        assert_eq!((form.insert_mark.as_str(), form.balloons.as_str(), form.insert_color.as_str()), ("underline", "commentsAndFormatting", ""));
-        assert_eq!(form.comment_display, "margin", "comments stay in the margin, as in Word, unless chosen otherwise (#1055)");
+        assert_eq!(
+            a.run("review.trackingOptions", json!({})).unwrap(),
+            json!({"pending": "trackChangesOptions"})
+        );
+        let Some(Dialog::TrackOptions { form }) = &mut a.dialog else {
+            panic!("dialog")
+        };
+        assert_eq!(
+            (
+                form.insert_mark.as_str(),
+                form.balloons.as_str(),
+                form.insert_color.as_str()
+            ),
+            ("underline", "commentsAndFormatting", "")
+        );
+        assert_eq!(
+            form.comment_display, "margin",
+            "comments stay in the margin, as in Word, unless chosen otherwise (#1055)"
+        );
         form.comment_display = "selected".into();
         form.insert_mark = "doubleUnderline".into();
         form.changed_lines = "right".into();
@@ -626,14 +836,23 @@ mod tests {
         a.dialog = None;
         a.run("review.trackingOptions", params).unwrap();
         let m = &a.session.prefs.markup;
-        assert_eq!(m.insert_mark, wordcraft_layout::display::InsertMark::DoubleUnderline);
-        assert_eq!(m.comment_display, wordcraft_layout::display::CommentDisplay::Selected);
+        assert_eq!(
+            m.insert_mark,
+            wordcraft_layout::display::InsertMark::DoubleUnderline
+        );
+        assert_eq!(
+            m.comment_display,
+            wordcraft_layout::display::CommentDisplay::Selected
+        );
         assert_eq!(m.changed_lines_color, Some(wordcraft_doc::Rgb(0xFF, 0, 0)));
         // Saved and restored with the preferences.
         let saved = a.prefs();
         let mut b = app();
         b.apply_prefs(saved);
-        assert_eq!(b.session.prefs.markup.changed_lines, wordcraft_layout::display::ChangeBar::Right);
+        assert_eq!(
+            b.session.prefs.markup.changed_lines,
+            wordcraft_layout::display::ChangeBar::Right
+        );
     }
 
     /// Gap #5: the Moves rows (Moved from / Moved to: mark and colour) start at green double
@@ -643,12 +862,26 @@ mod tests {
     fn track_changes_options_moves_rows_apply_marks_and_colours() {
         use wordcraft_layout::display::{DeleteMark, InsertMark, MOVE_COLOR};
         let mut a = app();
-        a.session.run("review.trackingOptions", &json!({"trackMoves": false})).unwrap();
+        a.session
+            .run("review.trackingOptions", &json!({"trackMoves": false}))
+            .unwrap();
         a.run("review.trackingOptions", json!({})).unwrap();
-        let Some(Dialog::TrackOptions { form }) = &mut a.dialog else { panic!("dialog") };
+        let Some(Dialog::TrackOptions { form }) = &mut a.dialog else {
+            panic!("dialog")
+        };
         assert_eq!(
-            (form.move_from_mark.as_str(), form.move_from_color.clone(), form.move_to_mark.as_str(), form.move_to_color.clone()),
-            ("doubleStrikethrough", MOVE_COLOR.hex(), "doubleUnderline", MOVE_COLOR.hex())
+            (
+                form.move_from_mark.as_str(),
+                form.move_from_color.clone(),
+                form.move_to_mark.as_str(),
+                form.move_to_color.clone()
+            ),
+            (
+                "doubleStrikethrough",
+                MOVE_COLOR.hex(),
+                "doubleUnderline",
+                MOVE_COLOR.hex()
+            )
         );
         form.move_from_mark = "strikethrough".into();
         form.move_from_color = "FF0000".into();
@@ -659,9 +892,22 @@ mod tests {
         a.dialog = None;
         a.run("review.trackingOptions", params).unwrap();
         let m = &a.session.prefs.markup;
-        assert_eq!((m.move_from_mark, m.move_from_color), (DeleteMark::Strikethrough, Some(wordcraft_doc::Rgb(0xFF, 0, 0))));
-        assert_eq!((m.move_to_mark, m.move_to_color), (InsertMark::Bold, None), "empty = by author");
-        assert!(!a.session.doc.settings.track_moves, "the document setting is untouched");
+        assert_eq!(
+            (m.move_from_mark, m.move_from_color),
+            (
+                DeleteMark::Strikethrough,
+                Some(wordcraft_doc::Rgb(0xFF, 0, 0))
+            )
+        );
+        assert_eq!(
+            (m.move_to_mark, m.move_to_color),
+            (InsertMark::Bold, None),
+            "empty = by author"
+        );
+        assert!(
+            !a.session.doc.settings.track_moves,
+            "the document setting is untouched"
+        );
     }
 
     /// Gap #5, Word for Mac 16.113.4 (2026-10-15): the Deletions and Moved from lists, and the
@@ -686,12 +932,36 @@ mod tests {
                 "doubleStrikethrough"
             ]
         );
-        assert_eq!(values(super::MOVE_TO_MARKS), ["none", "colorOnly", "bold", "italic", "underline", "doubleUnderline", "strikethrough"]);
-        assert!(super::DELETE_MARKS.iter().all(|(v, _)| DeleteMark::parse(v).is_some()));
-        assert!(super::MOVE_TO_MARKS.iter().chain(super::INSERT_MARKS).all(|(v, _)| InsertMark::parse(v).is_some()));
+        assert_eq!(
+            values(super::MOVE_TO_MARKS),
+            [
+                "none",
+                "colorOnly",
+                "bold",
+                "italic",
+                "underline",
+                "doubleUnderline",
+                "strikethrough"
+            ]
+        );
+        assert!(
+            super::DELETE_MARKS
+                .iter()
+                .all(|(v, _)| DeleteMark::parse(v).is_some())
+        );
+        assert!(
+            super::MOVE_TO_MARKS
+                .iter()
+                .chain(super::INSERT_MARKS)
+                .all(|(v, _)| InsertMark::parse(v).is_some())
+        );
         let mut a = app();
         for (v, _) in super::DELETE_MARKS {
-            a.run("review.trackingOptions", json!({"deleteMark": v, "moveFromMark": v})).unwrap();
+            a.run(
+                "review.trackingOptions",
+                json!({"deleteMark": v, "moveFromMark": v}),
+            )
+            .unwrap();
         }
     }
 }

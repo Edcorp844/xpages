@@ -41,12 +41,17 @@ pub fn poll(app: &mut WordApp, ctx: &egui::Context) {
 }
 
 /// The page rectangles (in page units) of the sentence being read, to highlight.
-pub fn highlight(app: &mut WordApp) -> Option<(wordcraft_engine::doc::Pos, wordcraft_engine::doc::Pos)> {
+pub fn highlight(
+    app: &mut WordApp,
+) -> Option<(wordcraft_engine::doc::Pos, wordcraft_engine::doc::Pos)> {
     if !app.session.read_aloud.open {
         return None;
     }
     let u = app.session.read_aloud.current()?;
-    Some((app.session.doc.clamp(&u.start), app.session.doc.clamp(&u.end)))
+    Some((
+        app.session.doc.clamp(&u.start),
+        app.session.doc.clamp(&u.end),
+    ))
 }
 
 /// The player window.
@@ -58,9 +63,14 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
     let state = app.session.read_aloud.state();
     let (index, count) = app.session.read_aloud.progress();
     let mut run: Option<(&str, serde_json::Value)> = None;
-    let right_top = app.canvas.canvas_rect.map_or(ctx.content_rect().right_top() + vec2(-24.0, 160.0), |r| r.right_top() + vec2(-24.0, 16.0));
+    let right_top = app
+        .canvas
+        .canvas_rect
+        .map_or(ctx.content_rect().right_top() + vec2(-24.0, 160.0), |r| {
+            r.right_top() + vec2(-24.0, 16.0)
+        });
     let window = egui::Window::new(tl!("Read Aloud"))
-        .id(egui::Id::new("read-aloud-player"))
+        .id(egui::Id::unique("read-aloud-player"))
         .collapsible(false)
         .resizable(false)
         .pivot(egui::Align2::RIGHT_TOP)
@@ -69,10 +79,20 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         ui.set_width(236.0);
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 6.0;
-            if button(ui, &t, "mediaPrev", tl!("Previous sentence"), count > 0 && index > 0) {
+            if button(
+                ui,
+                &t,
+                "mediaPrev",
+                tl!("Previous sentence"),
+                count > 0 && index > 0,
+            ) {
                 run = Some(("readAloud.previous", json!({})));
             }
-            let (icon, tip) = if state == State::Playing { ("mediaPause", tl!("Pause")) } else { ("mediaPlay", tl!("Play")) };
+            let (icon, tip) = if state == State::Playing {
+                ("mediaPause", tl!("Pause"))
+            } else {
+                ("mediaPlay", tl!("Play"))
+            };
             if button(ui, &t, icon, tip, true) {
                 run = Some(("readAloud.playPause", json!({})));
             }
@@ -84,7 +104,9 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
             }
             ui.add_space(4.0);
             let what = match state {
-                State::Playing => format!("{} {} / {}", tl!("Sentence"), (index + 1).min(count), count),
+                State::Playing => {
+                    format!("{} {} / {}", tl!("Sentence"), (index + 1).min(count), count)
+                }
                 State::Paused => tl!("Paused").to_string(),
                 State::Stopped if count > 0 && index >= count => tl!("Finished").to_string(),
                 State::Stopped => tl!("Stopped").to_string(),
@@ -94,8 +116,10 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         ui.add_space(6.0);
         // Speed: applied when the slider is let go, so dragging doesn't restart the sentence
         // on every frame.
-        let id = egui::Id::new("read-aloud-rate");
-        let mut rate = ui.data(|d| d.get_temp::<f32>(id)).unwrap_or_else(|| app.session.read_aloud.rate());
+        let id = egui::Id::unique("read-aloud-rate");
+        let mut rate = ui
+            .data(|d| d.get_temp::<f32>(id))
+            .unwrap_or_else(|| app.session.read_aloud.rate());
         ui.horizontal(|ui| {
             ui.label(tl!("Speed"));
             ui.spacing_mut().slider_width = 110.0;
@@ -114,21 +138,31 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
                     run = Some(("readAloud.speed", json!({"value": rate})));
                 }
             }
-            if ui.small_button("1×").on_hover_text(tl!("Normal speed")).clicked() {
+            if ui
+                .small_button("1×")
+                .on_hover_text(tl!("Normal speed"))
+                .clicked()
+            {
                 run = Some(("readAloud.speed", json!({"value": 1.0})));
             }
         });
         let mut skip = app.session.read_aloud.skip_citations;
         if ui
             .checkbox(&mut skip, tl!("Skip citations & bibliography"))
-            .on_hover_text(tl!("Don't read Zotero, Mendeley or EndNote citations and bibliographies"))
+            .on_hover_text(tl!(
+                "Don't read Zotero, Mendeley or EndNote citations and bibliographies"
+            ))
             .changed()
         {
             run = Some(("readAloud.skipCitations", json!({"value": skip})));
         }
         // The error `poll` saw this frame, not the worker's latest: the player thread can set
         // one between the two, and the window would show a message the status bar hasn't.
-        if let Some(e) = app.read_aloud_error.as_ref().filter(|e| app.session.read_aloud.error().as_ref() == Some(*e)) {
+        if let Some(e) = app
+            .read_aloud_error
+            .as_ref()
+            .filter(|e| app.session.read_aloud.error().as_ref() == Some(*e))
+        {
             ui.label(egui::RichText::new(e.as_str()).color(t.red).small());
         }
     });
@@ -145,13 +179,38 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
 
 /// An icon button; returns whether it was clicked.
 fn button(ui: &mut Ui, t: &Tokens, icon: &str, tip: &str, enabled: bool) -> bool {
-    let (rect, resp) = ui.allocate_exact_size(vec2(30.0, 30.0), if enabled { Sense::click() } else { Sense::hover() });
+    let (rect, resp) = ui.allocate_exact_size(
+        vec2(30.0, 30.0),
+        if enabled {
+            Sense::click()
+        } else {
+            Sense::hover()
+        },
+    );
     let resp = resp.on_hover_text(tip);
     if enabled && resp.hovered() {
-        ui.painter().rect_filled(rect, 4.0, if resp.is_pointer_button_down_on() { t.pressed } else { t.hover });
+        ui.painter().rect_filled(
+            rect,
+            4.0,
+            if resp.is_pointer_button_down_on() {
+                t.pressed
+            } else {
+                t.hover
+            },
+        );
     }
     let c = if enabled { t.icon } else { t.text_disabled };
     let r = Rect::from_center_size(rect.center(), vec2(20.0, 20.0));
-    crate::icons::paint(ui.painter(), r, icon, c, if enabled { t.accent } else { Color32::TRANSPARENT });
+    crate::icons::paint(
+        ui.painter(),
+        r,
+        icon,
+        c,
+        if enabled {
+            t.accent
+        } else {
+            Color32::TRANSPARENT
+        },
+    );
     enabled && resp.clicked()
 }

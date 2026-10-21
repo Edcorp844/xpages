@@ -1,7 +1,7 @@
-#![cfg(feature = "read")]
+//#![cfg(feature = "read")]
 #![allow(clippy::unwrap_used, clippy::panic)]
 
-#[cfg(feature = "interpret")]
+//#[cfg(feature = "interpret")]
 mod device {
     use craft_pdf::interpret::{
         BlendMode, ClipPath, Context, Device, GlyphDrawMode, Image, InterpreterCache, InterpreterSettings, Paint, PathDrawMode, SoftMask,

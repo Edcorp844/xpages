@@ -3,7 +3,9 @@
 //! title-bar height and about 1.6× that wide, all of it clickable. It fills red with a white ✕
 //! while the pointer is over it and darker red while pressed. Escape closes dialogs as before.
 
-use egui::{CornerRadius, Margin, Rect, Response, Sense, Stroke, TextStyle, Ui, UiBuilder, pos2, vec2};
+use egui::{
+    CornerRadius, Margin, Rect, Response, Sense, Stroke, TextStyle, Ui, UiBuilder, pos2, vec2,
+};
 
 use crate::theme::Tokens;
 
@@ -26,7 +28,10 @@ pub(crate) fn geometry(ctx: &egui::Context) -> Geometry {
     let heading = ctx.fonts_mut(|f| f.row_height(&TextStyle::Heading.resolve(&style)));
     let m = style.spacing.window_margin;
     let title_h = heading + f32::from(m.top) + f32::from(m.bottom);
-    Geometry { title_h, width: (WIDTH * title_h).round().clamp(0.0, 127.0) }
+    Geometry {
+        title_h,
+        width: (WIDTH * title_h).round().clamp(0.0, 127.0),
+    }
 }
 
 /// Reserves the box's room at the right end of `w`'s title bar. Pair with [`show`] after
@@ -53,20 +58,38 @@ pub(crate) fn show(ctx: &egui::Context, window: &Response, t: &Tokens) -> bool {
     let stroke = style.visuals.window_stroke.width;
     let rect = close_rect(window.rect, stroke, geometry(ctx));
     let id = window.layer_id.id.with("close_box");
-    let ui = Ui::new(ctx.clone(), id, UiBuilder::new().layer_id(window.layer_id).max_rect(rect));
+    let ui = Ui::new(
+        ctx.clone(),
+        id,
+        UiBuilder::new().layer_id(window.layer_id).max_rect(rect),
+    );
     // Pointer-only, like a caption button: Tab never lands on it.
     let r = ui.interact(rect, id.with("hit"), Sense::CLICK | Sense::DRAG);
     let label = tl!("Close");
-    r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
+    r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
     let r = r.on_hover_text(label);
     let down = r.is_pointer_button_down_on() && r.contains_pointer();
     let hot = down || r.hovered();
     let painter = ctx.layer_painter(window.layer_id);
     if hot {
-        let ne = style.visuals.window_corner_radius.ne.saturating_sub(stroke.round() as u8);
-        painter.rect_filled(rect, CornerRadius { ne, ..CornerRadius::ZERO }, if down { t.close_pressed } else { t.close_hover });
+        let ne = style
+            .visuals
+            .window_corner_radius
+            .ne
+            .saturating_sub(stroke.round() as u8);
+        painter.rect_filled(
+            rect,
+            CornerRadius {
+                ne,
+                ..CornerRadius::ZERO
+            },
+            if down { t.close_pressed } else { t.close_hover },
+        );
     }
-    let c = pos2(painter.round_to_pixel_center(rect.center().x), painter.round_to_pixel_center(rect.center().y));
+    let c = pos2(
+        painter.round_to_pixel_center(rect.center().x),
+        painter.round_to_pixel_center(rect.center().y),
+    );
     let s = Stroke::new(1.0, if hot { t.on_close } else { t.text });
     painter.line_segment([c + vec2(-GLYPH, -GLYPH), c + vec2(GLYPH, GLYPH)], s);
     painter.line_segment([c + vec2(-GLYPH, GLYPH), c + vec2(GLYPH, -GLYPH)], s);
@@ -80,23 +103,32 @@ mod tests {
     use serde_json::json;
 
     fn harness(app: WordApp) -> egui_kittest::Harness<'static, WordApp> {
-        egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
-            |ui, app: &mut WordApp| {
-                let ctx = ui.ctx().clone();
-                app.logic(&ctx);
-                app.ui(ui);
-            },
-            app,
-        )
+        egui_kittest::Harness::builder()
+            .with_size(vec2(1440.0, 900.0))
+            .build_ui_state(
+                |ui, app: &mut WordApp| {
+                    let ctx = ui.ctx().clone();
+                    app.logic(&ctx);
+                    app.ui(ui);
+                },
+                app,
+            )
     }
 
     /// Clicks the close box of the window area `id`: 6 px from its right edge, mid title bar,
     /// well outside the ✕.
     fn click_close_box(h: &mut egui_kittest::Harness<'_, WordApp>, id: egui::Id) {
         let window = h.ctx.memory(|m| m.area_rect(id)).expect("window is open");
-        let at = pos2(window.right() - 6.0, close_rect(window, 1.0, geometry(&h.ctx)).center().y);
-        let button =
-            |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+        let at = pos2(
+            window.right() - 6.0,
+            close_rect(window, 1.0, geometry(&h.ctx)).center().y,
+        );
+        let button = |pressed| egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
         h.event(egui::Event::PointerMoved(at));
         h.step();
         h.event(button(true));
@@ -111,8 +143,15 @@ mod tests {
     /// geometry says, flush with the window's right edge.
     #[test]
     fn the_box_is_the_title_bars_right_end() {
-        let g = Geometry { title_h: 30.0, width: 48.0 };
-        let r = close_rect(Rect::from_min_max(pos2(100.0, 50.0), pos2(400.0, 200.0)), 1.0, g);
+        let g = Geometry {
+            title_h: 30.0,
+            width: 48.0,
+        };
+        let r = close_rect(
+            Rect::from_min_max(pos2(100.0, 50.0), pos2(400.0, 200.0)),
+            1.0,
+            g,
+        );
         assert_eq!(r, Rect::from_min_max(pos2(351.0, 51.0), pos2(399.0, 81.0)));
     }
 
@@ -138,40 +177,64 @@ mod tests {
     /// The Read Aloud player and the file browser use the same box, and close from it.
     #[test]
     fn the_player_and_the_file_browser_close_from_the_box() {
-        let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        let mut app = WordApp::new(
+            wordcraft_engine::Session::new(wordcraft_doc::Document::new()),
+            crate::Services::default(),
+        );
         app.session.read_aloud.open = true;
         let mut h = harness(app);
         for _ in 0..4 {
             h.step();
         }
-        click_close_box(&mut h, egui::Id::new("read-aloud-player"));
-        assert!(!h.state().session.read_aloud.open, "the player stops and closes");
-        let _ = h.state_mut().run("ui.fileBrowser", json!({"purpose": "document"}));
+        click_close_box(&mut h, egui::Id::unique("read-aloud-player"));
+        assert!(
+            !h.state().session.read_aloud.open,
+            "the player stops and closes"
+        );
+        let _ = h
+            .state_mut()
+            .run("ui.fileBrowser", json!({"purpose": "document"}));
         for _ in 0..4 {
             h.step();
         }
         assert!(h.state().file_browser.open.is_some(), "the browser opened");
-        click_close_box(&mut h, egui::Id::new("builtin_file_browser"));
-        assert!(h.state().file_browser.open.is_none(), "the browser is cancelled");
+        click_close_box(&mut h, egui::Id::unique("builtin_file_browser"));
+        assert!(
+            h.state().file_browser.open.is_none(),
+            "the browser is cancelled"
+        );
     }
 
     /// The box is pointer-only, like a Windows caption button: Tab never lands on it, so Enter
     /// can't close a dialog by accident.
     #[test]
     fn the_box_is_not_in_the_tab_order() {
-        let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        let mut app = WordApp::new(
+            wordcraft_engine::Session::new(wordcraft_doc::Document::new()),
+            crate::Services::default(),
+        );
         let _ = app.run("ui.dialog", json!({"name": "wordCount"}));
         let mut h = harness(app);
         for _ in 0..4 {
             h.step();
         }
-        let hit = egui::Id::new(("dialog", "Word Count")).with("close_box").with("hit");
+        let hit = egui::Id::unique(("dialog", "Word Count"))
+            .with("close_box")
+            .with("hit");
         let r = h.ctx.read_response(hit).expect("the close box is a widget");
-        assert!(r.sense.senses_click() && !r.sense.is_focusable(), "pointer-only: {:?}", r.sense);
+        assert!(
+            r.sense.senses_click() && !r.sense.is_focusable(),
+            "pointer-only: {:?}",
+            r.sense
+        );
         for _ in 0..12 {
             h.key_press(egui::Key::Tab);
             h.step();
-            assert_ne!(h.ctx.memory(|m| m.focused()), Some(hit), "Tab skips the close box");
+            assert_ne!(
+                h.ctx.memory(|m| m.focused()),
+                Some(hit),
+                "Tab skips the close box"
+            );
         }
         assert!(h.state().dialog.is_some(), "the dialog is still open");
     }

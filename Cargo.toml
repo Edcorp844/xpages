@@ -16,6 +16,8 @@ resolver = "3"
 
 [workspace.dependencies]
 # internal
+craft-pdf = {path = "crates/craft-pdf"}
+craft-ui = {path = "crates/craft-ui"}
 wordcraft-control-key = {path = "crates/control-key"}
 wordcraft-doc = {path = "crates/doc"}
 wordcraft-docbin = {path = "crates/docbin"}
@@ -27,9 +29,7 @@ wordcraft-geom = {path = "crates/geom"}
 wordcraft-layout = {path = "crates/layout"}
 wordcraft-mcp = {path = "crates/mcp"}
 wordcraft-metafile = {path = "crates/metafile"}
-#wordcraft-pdf = {path = "crates/pdf"}
-craft-pdf = {path = "crates/craft-pdf"}
-craft-ui = {path = "crates/craft-ui"}
+wordcraft-pdf = {path = "crates/pdf"}
 wordcraft-proof = {path = "crates/proof"}
 wordcraft-render = {path = "crates/render"}
 wordcraft-ui-egui = {path = "crates/ui-egui"}

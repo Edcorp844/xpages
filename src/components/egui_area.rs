@@ -262,10 +262,6 @@ mod imp {
             self.parent_grab_focus()
         }
 
-        fn hide(&self) {
-            self.parent_hide()
-        }
-
         fn keynav_failed(&self, direction_type: gtk::DirectionType) -> bool {
             self.parent_keynav_failed(direction_type)
         }
@@ -302,10 +298,6 @@ mod imp {
 
         fn set_focus_child(&self, child: Option<&gtk::Widget>) {
             self.parent_set_focus_child(child)
-        }
-
-        fn show(&self) {
-            self.parent_show()
         }
 
         fn size_allocate(&self, width: i32, height: i32, baseline: i32) {

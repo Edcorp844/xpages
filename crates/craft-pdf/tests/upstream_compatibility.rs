@@ -1,5 +1,5 @@
 //! Observable resource, object-depth and text-paint compatibility contracts.
-#![cfg(feature = "read")]
+//#![cfg(feature = "read")]
 #![allow(clippy::unwrap_used, clippy::panic)]
 
 use craft_pdf::syntax::object::{FromBytes, ObjRef, Object};

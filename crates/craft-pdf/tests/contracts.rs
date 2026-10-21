@@ -1,4 +1,4 @@
-#![cfg(feature = "raster")]
+//#![cfg(feature = "raster")]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 use craft_pdf::{
     interpret::InterpreterSettings,

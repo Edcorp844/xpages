@@ -28,20 +28,31 @@ fn step(h: &mut egui_kittest::Harness<'_, WordApp>) -> f64 {
 fn stats(v: &[f64]) -> serde_json::Value {
     let mut s = v.to_vec();
     s.sort_by(|a, b| a.total_cmp(b));
-    let at = |q: f64| s.get(((s.len() as f64 - 1.0) * q).round() as usize).copied().unwrap_or(0.0);
+    let at = |q: f64| {
+        s.get(((s.len() as f64 - 1.0) * q).round() as usize)
+            .copied()
+            .unwrap_or(0.0)
+    };
     json!({"n": s.len(), "med": (at(0.5) * 10.0).round() / 10.0, "p95": (at(0.95) * 10.0).round() / 10.0, "max": (at(1.0) * 10.0).round() / 10.0})
 }
 
 fn main() {
-    let path = std::env::args().nth(1).expect("usage: perf_probe doc.docx [block]");
+    let path = std::env::args()
+        .nth(1)
+        .expect("usage: perf_probe doc.docx [block]");
     let block: Option<usize> = std::env::args().nth(2).and_then(|b| b.parse().ok());
     let t_open = Instant::now();
     let mut session = Session::new(wordcraft_doc::Document::new());
-    session.run("file.open", &json!({"path": path})).expect("open");
+    session
+        .run("file.open", &json!({"path": path}))
+        .expect("open");
     let open_ms = t_open.elapsed().as_secs_f64() * 1000.0;
     let app = WordApp::new(session, Services::default());
-    let mut h =
-        egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_pixels_per_point(2.0).with_max_steps(1_000_000).build_ui_state(
+    let mut h = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(1440.0, 900.0))
+        .with_pixels_per_point(2.0)
+        .with_max_steps(1_000_000)
+        .build_ui_state(
             |ui, app: &mut WordApp| {
                 if !READY.load(std::sync::atomic::Ordering::Relaxed) {
                     return;
@@ -54,16 +65,27 @@ fn main() {
         );
     READY.store(true, std::sync::atomic::Ordering::Relaxed);
     let first: Vec<f64> = (0..6).map(|_| step(&mut h)).collect();
-    let mut out =
-        json!({"open_ms": (open_ms * 10.0).round() / 10.0, "first_frames_ms": first.iter().map(|x| (x * 10.0).round() / 10.0).collect::<Vec<_>>()});
+    let mut out = json!({"open_ms": (open_ms * 10.0).round() / 10.0, "first_frames_ms": first.iter().map(|x| (x * 10.0).round() / 10.0).collect::<Vec<_>>()});
 
     // Typing: the caret in the middle of `block` (default: the longest paragraph), 40 characters.
     let doc_block = block.unwrap_or_else(|| {
         let s = &h.state().session;
-        s.doc.body.iter().enumerate().filter_map(|(i, b)| b.as_para().map(|p| (i, p.len()))).max_by_key(|(_, l)| *l).map(|(i, _)| i).unwrap_or(0)
+        s.doc
+            .body
+            .iter()
+            .enumerate()
+            .filter_map(|(i, b)| b.as_para().map(|p| (i, p.len())))
+            .max_by_key(|(_, l)| *l)
+            .map(|(i, _)| i)
+            .unwrap_or(0)
     });
-    let typing = |h: &mut egui_kittest::Harness<'_, WordApp>, pos: serde_json::Value| -> serde_json::Value {
-        h.state_mut().session.run("caret.set", &json!({"pos": pos})).ok();
+    let typing = |h: &mut egui_kittest::Harness<'_, WordApp>,
+                  pos: serde_json::Value|
+     -> serde_json::Value {
+        h.state_mut()
+            .session
+            .run("caret.set", &json!({"pos": pos}))
+            .ok();
         h.state_mut().canvas.want_focus = true;
         for _ in 0..3 {
             step(h);
@@ -81,33 +103,79 @@ fn main() {
         let typed = frames.chunks(2).map(|c| c[0] + c[1]).collect::<Vec<_>>();
         json!({"frame_with_key_ms": stats(&frames.iter().step_by(2).copied().collect::<Vec<_>>()), "two_frames_ms": stats(&typed), "layout_ms": stats(&lay), "render_ms": stats(&ren)})
     };
-    let mid = h.state().session.doc.body.get(doc_block).and_then(|b| b.as_para()).map(|p| p.len() / 2).unwrap_or(0);
+    let mid = h
+        .state()
+        .session
+        .doc
+        .body
+        .get(doc_block)
+        .and_then(|b| b.as_para())
+        .map(|p| p.len() / 2)
+        .unwrap_or(0);
     // a char boundary at or before the middle
     let mid = {
-        let p = h.state().session.doc.body.get(doc_block).and_then(|b| b.as_para()).map(|p| p.plain_text()).unwrap_or_default();
-        (0..=mid.min(p.len())).rev().find(|i| p.is_char_boundary(*i)).unwrap_or(0)
+        let p = h
+            .state()
+            .session
+            .doc
+            .body
+            .get(doc_block)
+            .and_then(|b| b.as_para())
+            .map(|p| p.plain_text())
+            .unwrap_or_default();
+        (0..=mid.min(p.len()))
+            .rev()
+            .find(|i| p.is_char_boundary(*i))
+            .unwrap_or(0)
     };
-    out["typing_long_para"] = typing(&mut h, json!({"story": "body", "path": [doc_block], "off": mid}));
-    out["typing_para_len"] = json!(h.state().session.doc.body.get(doc_block).and_then(|b| b.as_para()).map(|p| p.len()).unwrap_or(0));
-    let table = h.state().session.doc.body.iter().position(|b| matches!(&**b, wordcraft_doc::Block::Table(_)));
+    out["typing_long_para"] = typing(
+        &mut h,
+        json!({"story": "body", "path": [doc_block], "off": mid}),
+    );
+    out["typing_para_len"] = json!(
+        h.state()
+            .session
+            .doc
+            .body
+            .get(doc_block)
+            .and_then(|b| b.as_para())
+            .map(|p| p.len())
+            .unwrap_or(0)
+    );
+    let table = h
+        .state()
+        .session
+        .doc
+        .body
+        .iter()
+        .position(|b| matches!(&**b, wordcraft_doc::Block::Table(_)));
     if let Some(t) = table {
-        out["typing_table"] = typing(&mut h, json!({"story": "body", "path": [t, 0, 0, 0], "off": 0}));
+        out["typing_table"] = typing(
+            &mut h,
+            json!({"story": "body", "path": [t, 0, 0, 0], "off": 0}),
+        );
     }
 
     // Scrolling: mouse wheel (120 pt notches) and trackpad (20 pt gestures) over the canvas.
-    let scroll = |h: &mut egui_kittest::Harness<'_, WordApp>, dy: f32, n: usize| -> serde_json::Value {
+    let scroll = |h: &mut egui_kittest::Harness<'_, WordApp>,
+                  dy: f32,
+                  n: usize|
+     -> serde_json::Value {
         h.state_mut().session.run("caret.docStart", &json!({})).ok();
         for _ in 0..3 {
             step(h);
         }
         let mut f = Vec::new();
         for _ in 0..n {
-            h.input_mut().events.push(egui::Event::PointerMoved(egui::pos2(720.0, 500.0)));
+            h.input_mut()
+                .events
+                .push(egui::Event::PointerMoved(egui::pos2(720.0, 500.0)));
             h.input_mut().events.push(egui::Event::MouseWheel {
                 unit: egui::MouseWheelUnit::Point,
                 delta: egui::vec2(0.0, dy),
                 phase: egui::TouchPhase::Move,
                 modifiers: egui::Modifiers::NONE,
+                source: egui::MouseWheelSource::Wheel,
             });
             f.push(step(h));
         }
@@ -119,20 +187,37 @@ fn main() {
     // Zoom, ribbon tabs, resize: the frame after the change.
     let mut zoom = Vec::new();
     for z in [50, 75, 100, 150, 200, 100] {
-        h.state_mut().session.run("view.zoom", &json!({"value": z})).ok();
+        h.state_mut()
+            .session
+            .run("view.zoom", &json!({"value": z}))
+            .ok();
         let a = step(&mut h);
         let b = step(&mut h);
         zoom.push(json!({"zoom": z, "frame_ms": (a * 10.0).round() / 10.0, "next_ms": (b * 10.0).round() / 10.0}));
     }
     out["zoom"] = json!(zoom);
     let mut tabs = Vec::new();
-    for t in ["Insert", "Draw", "Design", "Layout", "References", "Mailings", "Review", "View", "Home"] {
+    for t in [
+        "Insert",
+        "Draw",
+        "Design",
+        "Layout",
+        "References",
+        "Mailings",
+        "Review",
+        "View",
+        "Home",
+    ] {
         h.state_mut().execute("ui.tab", json!({"tab": t})).ok();
         tabs.push(step(&mut h));
     }
     out["ribbon_tab_ms"] = stats(&tabs);
     let mut rs = Vec::new();
-    for w in (800..=1440).rev().step_by(40).chain((800..=1440).step_by(40)) {
+    for w in (800..=1440)
+        .rev()
+        .step_by(40)
+        .chain((800..=1440).step_by(40))
+    {
         h.set_size(egui::vec2(w as f32, 900.0));
         rs.push(step(&mut h));
     }
@@ -140,7 +225,10 @@ fn main() {
     // Accept all (if the document has tracked changes).
     if !h.state().session.doc.revisions.is_empty() {
         let t = Instant::now();
-        h.state_mut().session.run("review.acceptAll", &json!({})).ok();
+        h.state_mut()
+            .session
+            .run("review.acceptAll", &json!({}))
+            .ok();
         let cmd = t.elapsed().as_secs_f64() * 1000.0;
         let f = step(&mut h);
         out["accept_all"] = json!({"command_ms": (cmd * 10.0).round() / 10.0, "frame_ms": (f * 10.0).round() / 10.0});

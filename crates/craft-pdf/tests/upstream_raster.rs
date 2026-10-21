@@ -1,5 +1,5 @@
 //! Portable regressions adapted from PdfCraft 7437bde378f43856eada40af25b983812e615e8a (MIT OR Apache-2.0).
-#![cfg(feature = "raster")]
+//#![cfg(feature = "raster")]
 use craft_pdf::{
     open_slice,
     raster::{self, Options, RenderCache},
@@ -12,10 +12,22 @@ struct Pixels {
 }
 fn render(bytes: &[u8]) -> Pixels {
     let pdf = open_slice(bytes, None).unwrap();
-    let raster =
-        raster::render(&pdf.pages()[0], &RenderCache::new(), &Default::default(), &Options { background: [255; 4], ..Default::default() }).unwrap();
+    let raster = raster::render(
+        &pdf.pages()[0],
+        &RenderCache::new(),
+        &Default::default(),
+        &Options {
+            background: [255; 4],
+            ..Default::default()
+        },
+    )
+    .unwrap();
     assert!(raster.diagnostics.is_empty(), "{:?}", raster.diagnostics);
-    Pixels { width: raster.width, height: raster.height, rgba: raster.bytes().to_vec() }
+    Pixels {
+        width: raster.width,
+        height: raster.height,
+        rgba: raster.bytes().to_vec(),
+    }
 }
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02X}")).collect()
@@ -27,10 +39,30 @@ fn hex(bytes: &[u8]) -> String {
 // Bradford reference: https://www.color.org/chadtag/ (ICC TN 02-2003).
 // White points: D50 [0.96422, 1, 0.82521], E [1, 1, 1],
 // D65 [0.95047, 1, 1.08883]. D65 adaptation is the identity.
-const SAMPLES: [[f64; 3]; 4] = [[50.0, 0.0, 0.0], [40.0, 20.0, -60.0], [70.0, -50.0, 30.0], [100.0, 0.0, 0.0]];
-const D50: [[u8; 3]; 4] = [[119, 119, 119], [67, 86, 194], [66, 194, 113], [255, 255, 255]];
-const E: [[u8; 3]; 4] = [[119, 119, 119], [50, 88, 194], [64, 194, 114], [255, 255, 255]];
-const D65: [[u8; 3]; 4] = [[119, 119, 119], [19, 90, 194], [77, 193, 114], [255, 255, 255]];
+const SAMPLES: [[f64; 3]; 4] = [
+    [50.0, 0.0, 0.0],
+    [40.0, 20.0, -60.0],
+    [70.0, -50.0, 30.0],
+    [100.0, 0.0, 0.0],
+];
+const D50: [[u8; 3]; 4] = [
+    [119, 119, 119],
+    [67, 86, 194],
+    [66, 194, 113],
+    [255, 255, 255],
+];
+const E: [[u8; 3]; 4] = [
+    [119, 119, 119],
+    [50, 88, 194],
+    [64, 194, 114],
+    [255, 255, 255],
+];
+const D65: [[u8; 3]; 4] = [
+    [119, 119, 119],
+    [19, 90, 194],
+    [77, 193, 114],
+    [255, 255, 255],
+];
 
 fn patch(space: &str, operands: &str) -> [u8; 4] {
     let content = format!("/C cs {operands} sc 0 0 20 20 re f");
@@ -45,13 +77,20 @@ fn patch(space: &str, operands: &str) -> [u8; 4] {
     .into_bytes();
     let page = render(&bytes);
     assert_eq!((page.width, page.height), (20, 20));
-    page.rgba.get((10 * 20 + 10) * 4..(10 * 20 + 10) * 4 + 4).unwrap().try_into().unwrap()
+    page.rgba
+        .get((10 * 20 + 10) * 4..(10 * 20 + 10) * 4 + 4)
+        .unwrap()
+        .try_into()
+        .unwrap()
 }
 
 fn assert_rgb(actual: [u8; 4], expected: [u8; 3], context: &str) {
     assert_eq!(actual[3], 255, "{context}: {actual:?}");
     for (got, want) in actual.into_iter().zip(expected) {
-        assert!(got.abs_diff(want) <= 1, "{context}: got {actual:?}, expected {expected:?}");
+        assert!(
+            got.abs_diff(want) <= 1,
+            "{context}: got {actual:?}, expected {expected:?}"
+        );
     }
 }
 
@@ -59,7 +98,11 @@ fn check_white(white: &str, expected: [[u8; 3]; 4]) {
     let space = format!("[/Lab << /WhitePoint {white} /Range [-100 100 -100 100] >>]");
     for (sample, expected) in SAMPLES.into_iter().zip(expected) {
         let operands = format!("{} {} {}", sample[0], sample[1], sample[2]);
-        assert_rgb(patch(&space, &operands), expected, &format!("{white} Lab {sample:?}"));
+        assert_rgb(
+            patch(&space, &operands),
+            expected,
+            &format!("{white} Lab {sample:?}"),
+        );
     }
 }
 
@@ -84,18 +127,34 @@ fn lab_bradford_d65_identity_oracles() {
 #[cfg_attr(not(target_arch = "wasm32"), test)]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 fn lab_bradford_indexed_matches_direct_and_oracle() {
-    for (white, blue) in [("[0.96422 1 0.82521]", D50[1]), ("[1 1 1]", E[1]), ("[0.95047 1 1.08883]", D65[1])] {
+    for (white, blue) in [
+        ("[0.96422 1 0.82521]", D50[1]),
+        ("[1 1 1]", E[1]),
+        ("[0.95047 1 1.08883]", D65[1]),
+    ] {
         // <66 99 33> maps exactly to L*=40, a*=20, b*=-60.
         let lab = format!("[/Lab << /WhitePoint {white} /Range [-100 100 -100 100] >>]");
         let indexed = patch(&format!("[/Indexed {lab} 0 <669933>]"), "0");
         assert_rgb(indexed, blue, &format!("{white} Indexed blue"));
-        assert_eq!(indexed, patch(&lab, "40 20 -60"), "{white} direct/Indexed blue");
+        assert_eq!(
+            indexed,
+            patch(&lab, "40 20 -60"),
+            "{white} direct/Indexed blue"
+        );
 
         // A non-default Range maps <80 80 80> to L*=128/255*100, a*=b*=0.
         let lab = format!("[/Lab << /WhitePoint {white} /Range [-128 127 -128 127] >>]");
         let indexed = patch(&format!("[/Indexed {lab} 0 <808080>]"), "0");
-        assert_rgb(indexed, [119, 119, 119], &format!("{white} Indexed neutral"));
-        assert_eq!(indexed, patch(&lab, "50.19607843137255 0 0"), "{white} direct/Indexed neutral");
+        assert_rgb(
+            indexed,
+            [119, 119, 119],
+            &format!("{white} Indexed neutral"),
+        );
+        assert_eq!(
+            indexed,
+            patch(&lab, "50.19607843137255 0 0"),
+            "{white} direct/Indexed neutral"
+        );
     }
 }
 
@@ -114,7 +173,11 @@ fn lab_bradford_degenerate_cones_fall_back_to_unadapted_xyz() {
         ),
     ] {
         let space = format!("[/Lab << /WhitePoint {white} >>]");
-        assert_rgb(patch(&space, "50 0 0"), expected, &format!("{white} degenerate cones"));
+        assert_rgb(
+            patch(&space, "50 0 0"),
+            expected,
+            &format!("{white} degenerate cones"),
+        );
     }
 }
 
@@ -150,9 +213,18 @@ fn shrunk_soft_mask_larger_than_its_image_keeps_thin_strokes() {
     );
     let page = render(pdf.as_bytes());
     assert_eq!((page.width, page.height), (4, 1));
-    let grays: Vec<u8> = page.rgba.as_chunks::<4>().0.iter().map(|px| px[0]).collect();
+    let grays: Vec<u8> = page
+        .rgba
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|px| px[0])
+        .collect();
     // The stroke covers half of device pixel 1, so it is a mid-tone; the far side stays white.
-    assert!((64..=191).contains(&grays[1]), "the stroke is lost or not a mid-tone: {grays:?}");
+    assert!(
+        (64..=191).contains(&grays[1]),
+        "the stroke is lost or not a mid-tone: {grays:?}"
+    );
     assert_eq!(grays[3], 255, "{grays:?}");
 }
 
@@ -182,13 +254,29 @@ trailer << /Root 1 0 R >>
         let p = render(pdf.as_bytes());
         p.rgba
     };
-    for glyph in ["1 0 0 0 1 1 d1 0.12 0.12 0.71 0.71 re f", "1 0 d0 0.12 0.12 0.71 0.71 re f"] {
+    for glyph in [
+        "1 0 0 0 1 1 d1 0.12 0.12 0.71 0.71 re f",
+        "1 0 d0 0.12 0.12 0.71 0.71 re f",
+    ] {
         let filled = render(glyph, 0);
-        assert!(filled.as_chunks::<4>().0.iter().any(|p| p[0] < 128), "{glyph}: the glyph paints");
+        assert!(
+            filled.as_chunks::<4>().0.iter().any(|p| p[0] < 128),
+            "{glyph}: the glyph paints"
+        );
         for mode in [1, 2, 4, 5, 6, 7] {
-            assert!(render(glyph, mode) == filled, "{glyph}: {mode} Tr draws as 0 Tr");
+            assert!(
+                render(glyph, mode) == filled,
+                "{glyph}: {mode} Tr draws as 0 Tr"
+            );
         }
-        assert!(render(glyph, 3).as_chunks::<4>().0.iter().all(|p| p[..3] == [255, 255, 255]), "{glyph}: 3 Tr hides the glyph");
+        assert!(
+            render(glyph, 3)
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .all(|p| p[..3] == [255, 255, 255]),
+            "{glyph}: 3 Tr hides the glyph"
+        );
     }
 }
 
@@ -206,8 +294,20 @@ fn tiff_predictor_packed_rgb_rows_keep_their_byte_boundaries() {
         masks: &'static [u8],
     }
     let cases = [
-        RowCase { bpc: 1, columns: 1, compressed: &[120, 156, 107, 112, 0, 0, 1, 66, 0, 193], expected: &[128, 64], masks: &[224] },
-        RowCase { bpc: 2, columns: 1, compressed: &[120, 156, 59, 96, 0, 0, 1, 178, 0, 241], expected: &[192, 48], masks: &[252] },
+        RowCase {
+            bpc: 1,
+            columns: 1,
+            compressed: &[120, 156, 107, 112, 0, 0, 1, 66, 0, 193],
+            expected: &[128, 64],
+            masks: &[224],
+        },
+        RowCase {
+            bpc: 2,
+            columns: 1,
+            compressed: &[120, 156, 59, 96, 0, 0, 1, 178, 0, 241],
+            expected: &[192, 48],
+            masks: &[252],
+        },
         RowCase {
             bpc: 4,
             columns: 1,
@@ -230,7 +330,14 @@ fn tiff_predictor_packed_rgb_rows_keep_their_byte_boundaries() {
             masks: &[255, 255, 255],
         },
     ];
-    for RowCase { bpc, columns, compressed, expected, masks } in cases {
+    for RowCase {
+        bpc,
+        columns,
+        compressed,
+        expected,
+        masks,
+    } in cases
+    {
         let mut bytes = format!(
             "<< /Filter /FlateDecode /DecodeParms << /Predictor 2 /Colors 3 /BitsPerComponent {bpc} /Columns {columns} >> /Length {} >> stream\n",
             compressed.len()
@@ -238,7 +345,9 @@ fn tiff_predictor_packed_rgb_rows_keep_their_byte_boundaries() {
         .into_bytes();
         bytes.extend_from_slice(compressed);
         bytes.extend_from_slice(b"\nendstream");
-        let Object::Stream(stream) = Object::from_bytes(&bytes).unwrap() else { panic!("stream expected") };
+        let Object::Stream(stream) = Object::from_bytes(&bytes).unwrap() else {
+            panic!("stream expected")
+        };
         let decoded = stream.decoded().unwrap();
         assert_eq!(decoded.len(), expected.len());
         for ((actual, expected), mask) in decoded.iter().zip(expected).zip(masks.iter().cycle()) {

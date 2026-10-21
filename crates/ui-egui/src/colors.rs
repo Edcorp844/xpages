@@ -28,20 +28,33 @@ pub const RECENT_MAX: usize = 10;
 pub fn parse(s: &str) -> Option<Rgb> {
     let s = s.trim();
     let hex = s.trim_start_matches('#');
-    let hex = hex.strip_prefix("0x").or_else(|| hex.strip_prefix("0X")).unwrap_or(hex);
+    let hex = hex
+        .strip_prefix("0x")
+        .or_else(|| hex.strip_prefix("0X"))
+        .unwrap_or(hex);
     if hex.len() == 6 {
         if let Some(c) = Rgb::parse(hex) {
             return Some(c);
         }
     } else if hex.len() == 3 && hex.is_ascii() {
-        let d = |i: usize| hex.get(i..i + 1).and_then(|h| u8::from_str_radix(h, 16).ok()).map(|v| v * 17);
+        let d = |i: usize| {
+            hex.get(i..i + 1)
+                .and_then(|h| u8::from_str_radix(h, 16).ok())
+                .map(|v| v * 17)
+        };
         if let (Some(r), Some(g), Some(b)) = (d(0), d(1), d(2)) {
             return Some(Rgb(r, g, b));
         }
     }
     let lower = s.to_ascii_lowercase();
-    let inner = lower.strip_prefix("rgb").map(|r| r.trim().trim_start_matches('(').trim_end_matches(')')).unwrap_or(&lower);
-    let parts: Vec<&str> = inner.split(|c: char| c == ',' || c.is_whitespace()).filter(|p| !p.is_empty()).collect();
+    let inner = lower
+        .strip_prefix("rgb")
+        .map(|r| r.trim().trim_start_matches('(').trim_end_matches(')'))
+        .unwrap_or(&lower);
+    let parts: Vec<&str> = inner
+        .split(|c: char| c == ',' || c.is_whitespace())
+        .filter(|p| !p.is_empty())
+        .collect();
     if parts.len() != 3 {
         return None;
     }
@@ -59,7 +72,11 @@ pub fn to_hsl(c: Rgb) -> (f32, f32, f32) {
     if d <= f32::EPSILON {
         return (0.0, 0.0, l);
     }
-    let s = if l > 0.5 { d / (2.0 - max - min) } else { d / (max + min) };
+    let s = if l > 0.5 {
+        d / (2.0 - max - min)
+    } else {
+        d / (max + min)
+    };
     let h = if max == r {
         (g - b) / d + if g < b { 6.0 } else { 0.0 }
     } else if max == g {
@@ -67,7 +84,11 @@ pub fn to_hsl(c: Rgb) -> (f32, f32, f32) {
     } else {
         (r - g) / d + 4.0
     };
-    ((h * 60.0).rem_euclid(360.0), s.clamp(0.0, 1.0), l.clamp(0.0, 1.0))
+    (
+        (h * 60.0).rem_euclid(360.0),
+        s.clamp(0.0, 1.0),
+        l.clamp(0.0, 1.0),
+    )
 }
 
 /// The colour with hue `h` (degrees, any value wraps), saturation `s` and lightness `l` (0–1,
@@ -170,7 +191,12 @@ pub enum Remember {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Target {
     /// Run `cmd` with the colour (`RRGGBB`) put into `params` at the JSON pointer `at`.
-    Run { cmd: String, params: Value, at: String, remember: Remember },
+    Run {
+        cmd: String,
+        params: Value,
+        at: String,
+        remember: Remember,
+    },
     /// A dialog's colour field (see [`field_menu`]).
     Field(Id),
 }
@@ -178,24 +204,46 @@ pub enum Target {
 impl Target {
     /// `cmd` with params `{"color": RRGGBB}`.
     pub fn cmd(cmd: &str) -> Target {
-        Target::Run { cmd: cmd.into(), params: json!({"color": null}), at: "/color".into(), remember: Remember::Nothing }
+        Target::Run {
+            cmd: cmd.into(),
+            params: json!({"color": null}),
+            at: "/color".into(),
+            remember: Remember::Nothing,
+        }
     }
 
     /// `cmd` with the colour at the JSON pointer `at` inside `params`.
     pub fn at(cmd: &str, params: Value, at: &str) -> Target {
-        Target::Run { cmd: cmd.into(), params, at: at.into(), remember: Remember::Nothing }
+        Target::Run {
+            cmd: cmd.into(),
+            params,
+            at: at.into(),
+            remember: Remember::Nothing,
+        }
     }
 
     pub fn remember(self, r: Remember) -> Target {
         match self {
-            Target::Run { cmd, params, at, .. } => Target::Run { cmd, params, at, remember: r },
+            Target::Run {
+                cmd, params, at, ..
+            } => Target::Run {
+                cmd,
+                params,
+                at,
+                remember: r,
+            },
             t => t,
         }
     }
 
     /// The command and params a pick of `hex` runs (`None` for a field).
     pub fn command(&self, hex: &str) -> Option<(String, Value)> {
-        let Target::Run { cmd, params, at, .. } = self else { return None };
+        let Target::Run {
+            cmd, params, at, ..
+        } = self
+        else {
+            return None;
+        };
         let mut p = params.clone();
         match p.pointer_mut(at) {
             Some(slot) => *slot = json!(hex),
@@ -227,7 +275,9 @@ pub fn apply(app: &mut WordApp, ctx: &egui::Context, target: &Target, hex: &str)
 
 /// The colour a target has now (the dialog's Current swatch).
 fn current_of(app: &mut WordApp, target: &Target) -> Option<Rgb> {
-    let Target::Run { cmd, .. } = target else { return None };
+    let Target::Run { cmd, .. } = target else {
+        return None;
+    };
     match cmd.as_str() {
         "format.color" => {
             let st = app.session.run("format.state", &json!({})).ok()?;
@@ -248,15 +298,15 @@ pub enum Pick {
 }
 
 fn recent_id() -> Id {
-    Id::new("wordcraft.recentColors")
+    Id::unique("wordcraft.recentColors")
 }
 
 fn request_id() -> Id {
-    Id::new("wordcraft.moreColorsRequest")
+    Id::unique("wordcraft.moreColorsRequest")
 }
 
 fn open_flag_id() -> Id {
-    Id::new("wordcraft.colorsDialogOpen")
+    Id::unique("wordcraft.colorsDialogOpen")
 }
 
 /// Removes and returns a temporary value.
@@ -275,7 +325,9 @@ struct FieldResult(String);
 /// The drop-down's body: theme and standard colours, Recent Colors, More Colors….
 pub fn palette(ui: &mut Ui, theme: &[Rgb]) -> Option<Pick> {
     let mut picked = crate::widgets::color_grid(ui, theme).map(Pick::Color);
-    let recent: Vec<String> = ui.data(|d| d.get_temp::<Vec<String>>(recent_id())).unwrap_or_default();
+    let recent: Vec<String> = ui
+        .data(|d| d.get_temp::<Vec<String>>(recent_id()))
+        .unwrap_or_default();
     let recent = self::recent(&recent);
     if !recent.is_empty() {
         ui.add_space(4.0);
@@ -310,9 +362,14 @@ fn more_item(ui: &mut Ui) -> egui::Response {
         let a1 = a0 + std::f32::consts::TAU / 12.0;
         let p = |a: f32| c + vec2(a.cos(), a.sin()) * 6.5;
         let col = c32(from_hsl(i as f32 * 30.0, 1.0, 0.5));
-        ui.painter().add(egui::Shape::convex_polygon(vec![c, p(a0), p(a1)], col, Stroke::NONE));
+        ui.painter().add(egui::Shape::convex_polygon(
+            vec![c, p(a0), p(a1)],
+            col,
+            Stroke::NONE,
+        ));
     }
-    ui.painter().circle_stroke(c, 6.5, Stroke::new(0.5, t.border_strong));
+    ui.painter()
+        .circle_stroke(c, 6.5, Stroke::new(0.5, t.border_strong));
     ui.painter().text(
         pos2(r.min.x + 22.0, r.center().y),
         egui::Align2::LEFT_CENTER,
@@ -367,7 +424,8 @@ pub fn take_field(ctx: &egui::Context, id: Id, value: &mut String) {
 
 /// Whether the Colors dialog was open last frame: dialogs under it leave Enter and Escape to it.
 pub fn is_open(ctx: &egui::Context) -> bool {
-    ctx.data(|d| d.get_temp::<bool>(open_flag_id())).unwrap_or(false)
+    ctx.data(|d| d.get_temp::<bool>(open_flag_id()))
+        .unwrap_or(false)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -405,14 +463,26 @@ pub struct ColorsDialog {
 impl ColorsDialog {
     pub fn new(current: Option<Rgb>, target: Target) -> ColorsDialog {
         let c = current.unwrap_or(Rgb::BLACK);
-        let mut d = ColorsDialog { tab: ColorsTab::Standard, color: c, hsl: (0.0, 0.0, 0.0), current, model: Model::Rgb, hex: String::new(), target };
+        let mut d = ColorsDialog {
+            tab: ColorsTab::Standard,
+            color: c,
+            hsl: (0.0, 0.0, 0.0),
+            current,
+            model: Model::Rgb,
+            hex: String::new(),
+            target,
+        };
         d.set_rgb(c);
         d
     }
 
     pub fn set_rgb(&mut self, c: Rgb) {
         let (h, s, l) = to_hsl(c);
-        let h = if s > 0.0 && l > 0.0 && l < 1.0 { h } else { self.hsl.0 };
+        let h = if s > 0.0 && l > 0.0 && l < 1.0 {
+            h
+        } else {
+            self.hsl.0
+        };
         self.color = c;
         self.hsl = (h, s, l);
         self.hex = c.hex();
@@ -442,14 +512,16 @@ impl ColorsDialog {
 /// Draws the Colors dialog if it is open (and opens it for a dialog field that asked).
 pub fn show(app: &mut WordApp, ctx: &egui::Context) {
     ctx.data_mut(|d| d.insert_temp(recent_id(), app.ui.recent_colors.clone()));
-    if let Some(FieldRequest(id, current)) = ctx.data_mut(|d| take::<FieldRequest>(d, request_id())) {
+    if let Some(FieldRequest(id, current)) = ctx.data_mut(|d| take::<FieldRequest>(d, request_id()))
+    {
         app.colors = Some(ColorsDialog::new(current, Target::Field(id)));
     }
     let Some(mut d) = app.colors.take() else {
         ctx.data_mut(|m| m.insert_temp(open_flag_id(), false));
         return;
     };
-    let resp = egui::Modal::new(Id::new("wordcraft.colorsDialog")).show(ctx, |ui| body(ui, &mut d));
+    let resp =
+        egui::Modal::new(Id::unique("wordcraft.colorsDialog")).show(ctx, |ui| body(ui, &mut d));
     let mut done = resp.inner;
     if done.is_none() && resp.should_close() {
         done = Some(false);
@@ -486,7 +558,10 @@ fn body(ui: &mut Ui, d: &mut ColorsDialog) -> Option<bool> {
     ui.label(egui::RichText::new(tl!("Colors")).font(crate::theme::semibold(14.0)));
     ui.add_space(6.0);
     ui.horizontal(|ui| {
-        for (tab, label) in [(ColorsTab::Standard, "Standard"), (ColorsTab::Custom, "Custom")] {
+        for (tab, label) in [
+            (ColorsTab::Standard, "Standard"),
+            (ColorsTab::Custom, "Custom"),
+        ] {
             if ui.selectable_label(d.tab == tab, tl!(label)).clicked() {
                 d.tab = tab;
             }
@@ -510,7 +585,11 @@ fn body(ui: &mut Ui, d: &mut ColorsDialog) -> Option<bool> {
     ui.add_space(8.0);
     ui.horizontal(|ui| {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let (okb, cancelb) = crate::dialogs::ok_cancel_responses(ui, |ui| ui.add(crate::widgets::primary_button(ui, tl!("OK"))), tl!("Cancel"));
+            let (okb, cancelb) = crate::dialogs::ok_cancel_responses(
+                ui,
+                |ui| ui.add(crate::widgets::primary_button(ui, tl!("OK"))),
+                tl!("Cancel"),
+            );
             if cancelb.clicked() {
                 out = Some(false);
             }
@@ -536,10 +615,18 @@ fn preview(ui: &mut Ui, d: &ColorsDialog, t: &Tokens) {
         }
         None => {
             ui.painter().rect_filled(bottom, 0.0, t.panel);
-            ui.painter().line_segment([bottom.left_bottom(), bottom.right_top()], Stroke::new(1.0, t.text_dim));
+            ui.painter().line_segment(
+                [bottom.left_bottom(), bottom.right_top()],
+                Stroke::new(1.0, t.text_dim),
+            );
         }
     }
-    ui.painter().rect_stroke(r, 0.0, Stroke::new(1.0, t.border_strong), egui::StrokeKind::Inside);
+    ui.painter().rect_stroke(
+        r,
+        0.0,
+        Stroke::new(1.0, t.border_strong),
+        egui::StrokeKind::Inside,
+    );
     ui.label(egui::RichText::new(tl!("Current")).small());
 }
 
@@ -558,7 +645,10 @@ fn standard(ui: &mut Ui, d: &mut ColorsDialog) {
     ui.label(tl!("Colors:"));
     let s = 11.0;
     let n = HONEYCOMB_RINGS as f32;
-    let size = vec2(3f32.sqrt() * s * (2.0 * n + 1.0) + 2.0, s * (3.0 * n + 2.0) + 2.0);
+    let size = vec2(
+        3f32.sqrt() * s * (2.0 * n + 1.0) + 2.0,
+        s * (3.0 * n + 2.0) + 2.0,
+    );
     let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), size.y), Sense::click());
     let centre = rect.center();
     let cells = honeycomb();
@@ -566,17 +656,29 @@ fn standard(ui: &mut Ui, d: &mut ColorsDialog) {
         let (x, y) = cell_xy(q, r);
         centre + vec2(x, y) * s
     };
-    let hit = |p: Pos2, centres: Vec<(Pos2, Rgb)>| centres.into_iter().find(|(c, _)| c.distance(p) < s * 0.9).map(|(_, col)| col);
+    let hit = |p: Pos2, centres: Vec<(Pos2, Rgb)>| {
+        centres
+            .into_iter()
+            .find(|(c, _)| c.distance(p) < s * 0.9)
+            .map(|(_, col)| col)
+    };
     let mut selected = None;
     for &(q, r, col) in &cells {
         let c = at(q, r);
-        ui.painter().add(egui::Shape::convex_polygon(hexagon(c, s), c32(col), Stroke::new(0.5, t.border_strong)));
+        ui.painter().add(egui::Shape::convex_polygon(
+            hexagon(c, s),
+            c32(col),
+            Stroke::new(0.5, t.border_strong),
+        ));
         if col == d.color {
             selected = Some(c);
         }
     }
     if let Some(p) = resp.interact_pointer_pos().filter(|_| resp.clicked())
-        && let Some(col) = hit(p, cells.iter().map(|&(q, r, col)| (at(q, r), col)).collect())
+        && let Some(col) = hit(
+            p,
+            cells.iter().map(|&(q, r, col)| (at(q, r), col)).collect(),
+        )
     {
         d.set_rgb(col);
     }
@@ -584,24 +686,42 @@ fn standard(ui: &mut Ui, d: &mut ColorsDialog) {
     ui.add_space(6.0);
     let greys = greys();
     let w = 3f32.sqrt() * s;
-    let (row, gresp) = ui.allocate_exact_size(vec2(ui.available_width(), s * 2.0 + 2.0), Sense::click());
+    let (row, gresp) =
+        ui.allocate_exact_size(vec2(ui.available_width(), s * 2.0 + 2.0), Sense::click());
     let x0 = row.center().x - w * (greys.len() as f32 - 1.0) / 2.0;
     let gat = |i: usize| pos2(x0 + w * i as f32, row.center().y);
     for (i, col) in greys.iter().enumerate() {
         let c = gat(i);
-        ui.painter().add(egui::Shape::convex_polygon(hexagon(c, s), c32(*col), Stroke::new(0.5, t.border_strong)));
+        ui.painter().add(egui::Shape::convex_polygon(
+            hexagon(c, s),
+            c32(*col),
+            Stroke::new(0.5, t.border_strong),
+        ));
         if *col == d.color {
             selected = Some(c);
         }
     }
     if let Some(p) = gresp.interact_pointer_pos().filter(|_| gresp.clicked())
-        && let Some(col) = hit(p, greys.iter().enumerate().map(|(i, col)| (gat(i), *col)).collect())
+        && let Some(col) = hit(
+            p,
+            greys
+                .iter()
+                .enumerate()
+                .map(|(i, col)| (gat(i), *col))
+                .collect(),
+        )
     {
         d.set_rgb(col);
     }
     if let Some(c) = selected {
-        ui.painter().add(egui::Shape::closed_line(hexagon(c, s), Stroke::new(2.5, Color32::WHITE)));
-        ui.painter().add(egui::Shape::closed_line(hexagon(c, s + 1.5), Stroke::new(1.0, Color32::BLACK)));
+        ui.painter().add(egui::Shape::closed_line(
+            hexagon(c, s),
+            Stroke::new(2.5, Color32::WHITE),
+        ));
+        ui.painter().add(egui::Shape::closed_line(
+            hexagon(c, s + 1.5),
+            Stroke::new(1.0, Color32::BLACK),
+        ));
     }
 }
 
@@ -616,7 +736,10 @@ fn custom(ui: &mut Ui, d: &mut ColorsDialog) {
         for j in 0..=rows {
             for i in 0..=cols {
                 let (u, v) = (i as f32 / cols as f32, j as f32 / rows as f32);
-                let p = pos2(field.min.x + u * field.width(), field.min.y + v * field.height());
+                let p = pos2(
+                    field.min.x + u * field.width(),
+                    field.min.y + v * field.height(),
+                );
                 mesh.colored_vertex(p, c32(from_hsl(u * 360.0, 1.0 - v, 0.5)));
             }
         }
@@ -628,16 +751,33 @@ fn custom(ui: &mut Ui, d: &mut ColorsDialog) {
             }
         }
         ui.painter().add(egui::Shape::mesh(mesh));
-        ui.painter().rect_stroke(field, 0.0, Stroke::new(1.0, t.border_strong), egui::StrokeKind::Outside);
-        if let Some(p) = fresp.interact_pointer_pos().filter(|_| fresp.clicked() || fresp.dragged()) {
+        ui.painter().rect_stroke(
+            field,
+            0.0,
+            Stroke::new(1.0, t.border_strong),
+            egui::StrokeKind::Outside,
+        );
+        if let Some(p) = fresp
+            .interact_pointer_pos()
+            .filter(|_| fresp.clicked() || fresp.dragged())
+        {
             let u = ((p.x - field.min.x) / field.width()).clamp(0.0, 1.0);
             let v = ((p.y - field.min.y) / field.height()).clamp(0.0, 1.0);
-            let l = if d.hsl.2 <= 0.0 || d.hsl.2 >= 1.0 { 0.5 } else { d.hsl.2 };
+            let l = if d.hsl.2 <= 0.0 || d.hsl.2 >= 1.0 {
+                0.5
+            } else {
+                d.hsl.2
+            };
             d.set_hsl(u * 359.9, 1.0 - v, l);
         }
-        let m = pos2(field.min.x + d.hsl.0 / 360.0 * field.width(), field.min.y + (1.0 - d.hsl.1) * field.height());
-        ui.painter().circle_stroke(m, 5.0, Stroke::new(2.0, Color32::BLACK));
-        ui.painter().circle_stroke(m, 4.0, Stroke::new(1.0, Color32::WHITE));
+        let m = pos2(
+            field.min.x + d.hsl.0 / 360.0 * field.width(),
+            field.min.y + (1.0 - d.hsl.1) * field.height(),
+        );
+        ui.painter()
+            .circle_stroke(m, 5.0, Stroke::new(2.0, Color32::BLACK));
+        ui.painter()
+            .circle_stroke(m, 4.0, Stroke::new(1.0, Color32::WHITE));
 
         // Lightness: white at the top, black at the bottom, through the picked hue and saturation.
         let (bar, bresp) = ui.allocate_exact_size(vec2(16.0, 170.0), Sense::click_and_drag());
@@ -656,77 +796,104 @@ fn custom(ui: &mut Ui, d: &mut ColorsDialog) {
             mesh.add_triangle(a + 1, a + 3, a + 2);
         }
         ui.painter().add(egui::Shape::mesh(mesh));
-        ui.painter().rect_stroke(bar, 0.0, Stroke::new(1.0, t.border_strong), egui::StrokeKind::Outside);
-        if let Some(p) = bresp.interact_pointer_pos().filter(|_| bresp.clicked() || bresp.dragged()) {
+        ui.painter().rect_stroke(
+            bar,
+            0.0,
+            Stroke::new(1.0, t.border_strong),
+            egui::StrokeKind::Outside,
+        );
+        if let Some(p) = bresp
+            .interact_pointer_pos()
+            .filter(|_| bresp.clicked() || bresp.dragged())
+        {
             let v = ((p.y - bar.min.y) / bar.height()).clamp(0.0, 1.0);
             d.set_hsl(d.hsl.0, d.hsl.1, 1.0 - v);
         }
         let y = bar.min.y + (1.0 - d.hsl.2) * bar.height();
         let tip = pos2(bar.max.x + 2.0, y);
-        ui.painter().add(egui::Shape::convex_polygon(vec![tip, tip + vec2(7.0, -5.0), tip + vec2(7.0, 5.0)], t.text, Stroke::NONE));
+        ui.painter().add(egui::Shape::convex_polygon(
+            vec![tip, tip + vec2(7.0, -5.0), tip + vec2(7.0, 5.0)],
+            t.text,
+            Stroke::NONE,
+        ));
         ui.add_space(8.0);
     });
     ui.add_space(8.0);
-    egui::Grid::new("colors_custom").num_columns(2).spacing(vec2(10.0, 5.0)).show(ui, |ui| {
-        ui.label(tl!("Color model:"));
-        egui::ComboBox::from_id_salt("colors_model")
-            .selected_text(match d.model {
-                Model::Rgb => "RGB",
-                Model::Hsl => "HSL",
-            })
-            .width(90.0)
-            .show_ui(ui, |ui| {
-                ui.selectable_value(&mut d.model, Model::Rgb, "RGB");
-                ui.selectable_value(&mut d.model, Model::Hsl, "HSL");
+    egui::Grid::new("colors_custom")
+        .num_columns(2)
+        .spacing(vec2(10.0, 5.0))
+        .show(ui, |ui| {
+            ui.label(tl!("Color model:"));
+            egui::ComboBox::from_id_salt("colors_model")
+                .selected_text(match d.model {
+                    Model::Rgb => "RGB",
+                    Model::Hsl => "HSL",
+                })
+                .width(90.0)
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut d.model, Model::Rgb, "RGB");
+                    ui.selectable_value(&mut d.model, Model::Hsl, "HSL");
+                });
+            ui.end_row();
+            match d.model {
+                Model::Rgb => {
+                    let mut c = [d.color.0, d.color.1, d.color.2];
+                    let mut changed = false;
+                    for (i, label) in ["Red:", "Green:", "Blue:"].into_iter().enumerate() {
+                        ui.label(tl!(label));
+                        if let Some(v) = c.get_mut(i) {
+                            changed |= ui
+                                .add(egui::DragValue::new(v).range(0..=255).speed(1.0))
+                                .changed();
+                        }
+                        ui.end_row();
+                    }
+                    if changed {
+                        d.set_rgb(Rgb(c[0], c[1], c[2]));
+                    }
+                }
+                Model::Hsl => {
+                    // Word-style 0–255 scales for all three.
+                    let to255 = |v: f32| (v * 255.0).round().clamp(0.0, 255.0) as u8;
+                    let mut v = [to255(d.hsl.0 / 360.0), to255(d.hsl.1), to255(d.hsl.2)];
+                    let mut changed = false;
+                    for (i, label) in ["Hue:", "Sat:", "Lum:"].into_iter().enumerate() {
+                        ui.label(tl!(label));
+                        if let Some(x) = v.get_mut(i) {
+                            changed |= ui
+                                .add(egui::DragValue::new(x).range(0..=255).speed(1.0))
+                                .changed();
+                        }
+                        ui.end_row();
+                    }
+                    if changed {
+                        d.set_hsl(
+                            v[0] as f32 / 255.0 * 360.0,
+                            v[1] as f32 / 255.0,
+                            v[2] as f32 / 255.0,
+                        );
+                    }
+                }
+            }
+            ui.label(tl!("Hex:"));
+            ui.horizontal(|ui| {
+                ui.label("#");
+                let mut text = d.hex.clone();
+                let r = ui.add(
+                    egui::TextEdit::singleline(&mut text)
+                        .desired_width(80.0)
+                        .char_limit(16),
+                );
+                if r.changed() {
+                    d.hex = text.clone();
+                    d.set_text(&text);
+                }
+                if r.lost_focus() {
+                    d.hex = d.color.hex();
+                }
             });
-        ui.end_row();
-        match d.model {
-            Model::Rgb => {
-                let mut c = [d.color.0, d.color.1, d.color.2];
-                let mut changed = false;
-                for (i, label) in ["Red:", "Green:", "Blue:"].into_iter().enumerate() {
-                    ui.label(tl!(label));
-                    if let Some(v) = c.get_mut(i) {
-                        changed |= ui.add(egui::DragValue::new(v).range(0..=255).speed(1.0)).changed();
-                    }
-                    ui.end_row();
-                }
-                if changed {
-                    d.set_rgb(Rgb(c[0], c[1], c[2]));
-                }
-            }
-            Model::Hsl => {
-                // Word-style 0–255 scales for all three.
-                let to255 = |v: f32| (v * 255.0).round().clamp(0.0, 255.0) as u8;
-                let mut v = [to255(d.hsl.0 / 360.0), to255(d.hsl.1), to255(d.hsl.2)];
-                let mut changed = false;
-                for (i, label) in ["Hue:", "Sat:", "Lum:"].into_iter().enumerate() {
-                    ui.label(tl!(label));
-                    if let Some(x) = v.get_mut(i) {
-                        changed |= ui.add(egui::DragValue::new(x).range(0..=255).speed(1.0)).changed();
-                    }
-                    ui.end_row();
-                }
-                if changed {
-                    d.set_hsl(v[0] as f32 / 255.0 * 360.0, v[1] as f32 / 255.0, v[2] as f32 / 255.0);
-                }
-            }
-        }
-        ui.label(tl!("Hex:"));
-        ui.horizontal(|ui| {
-            ui.label("#");
-            let mut text = d.hex.clone();
-            let r = ui.add(egui::TextEdit::singleline(&mut text).desired_width(80.0).char_limit(16));
-            if r.changed() {
-                d.hex = text.clone();
-                d.set_text(&text);
-            }
-            if r.lost_focus() {
-                d.hex = d.color.hex();
-            }
+            ui.end_row();
         });
-        ui.end_row();
-    });
 }
 
 #[cfg(test)]
@@ -742,7 +909,10 @@ mod tests {
         assert_eq!(parse("#f80"), Some(Rgb(0xFF, 0x88, 0x00)));
         assert_eq!(parse("rgb(12, 34, 56)"), Some(Rgb(12, 34, 56)));
         assert_eq!(parse("12 34 56"), Some(Rgb(12, 34, 56)));
-        for junk in ["", "#", "#12345", "GGGGGG", "rgb(1,2)", "256,0,0", "-1,0,0", "ééé", "#ééé", "1,2,3,4", "\u{0}"] {
+        for junk in [
+            "", "#", "#12345", "GGGGGG", "rgb(1,2)", "256,0,0", "-1,0,0", "ééé", "#ééé", "1,2,3,4",
+            "\u{0}",
+        ] {
             assert_eq!(parse(junk), None, "{junk:?}");
         }
     }
@@ -754,7 +924,11 @@ mod tests {
                 for b in (0..=255u8).step_by(51) {
                     let c = Rgb(r, g, b);
                     let (h, s, l) = to_hsl(c);
-                    assert!((0.0..360.0).contains(&h) && (0.0..=1.0).contains(&s) && (0.0..=1.0).contains(&l));
+                    assert!(
+                        (0.0..360.0).contains(&h)
+                            && (0.0..=1.0).contains(&s)
+                            && (0.0..=1.0).contains(&l)
+                    );
                     assert_eq!(from_hsl(h, s, l), c);
                 }
             }
@@ -763,7 +937,11 @@ mod tests {
         assert_eq!(from_hsl(120.0, 1.0, 0.5), Rgb(0, 255, 0));
         assert_eq!(from_hsl(240.0, 1.0, 0.5), Rgb(0, 0, 255));
         assert_eq!(from_hsl(-120.0, 1.0, 0.5), Rgb(0, 0, 255), "hue wraps");
-        assert_eq!(from_hsl(f32::NAN, f32::INFINITY, -3.0), Rgb(0, 0, 0), "junk input is clamped, never a panic");
+        assert_eq!(
+            from_hsl(f32::NAN, f32::INFINITY, -3.0),
+            Rgb(0, 0, 0),
+            "junk input is clamped, never a panic"
+        );
     }
 
     #[test]
@@ -777,7 +955,12 @@ mod tests {
         assert_eq!(list.len(), RECENT_MAX);
         assert_eq!(list.first().map(String::as_str), Some("0E0E0E"));
         assert_eq!(list.iter().filter(|h| *h == "0E0E0E").count(), 1);
-        let saved = vec!["FF0000".to_string(), "ff0000".into(), "nope".into(), "00FF00".into()];
+        let saved = vec![
+            "FF0000".to_string(),
+            "ff0000".into(),
+            "nope".into(),
+            "00FF00".into(),
+        ];
         assert_eq!(recent(&saved), vec![Rgb(255, 0, 0), Rgb(0, 255, 0)]);
     }
 
@@ -785,21 +968,56 @@ mod tests {
     fn honeycomb_is_white_in_the_middle_and_has_every_hue() {
         let cells = honeycomb();
         assert_eq!(cells.len(), 127, "6 rings around the centre");
-        assert_eq!(cells.iter().find(|(q, r, _)| (*q, *r) == (0, 0)).map(|c| c.2), Some(Rgb::WHITE));
-        let mid: Vec<Rgb> = cells.iter().filter(|(q, r, _)| q.abs().max(r.abs()).max((q + r).abs()) == 3).map(|c| c.2).collect();
-        assert!(mid.iter().any(|c| c.0 > 200 && c.1 < 100 && c.2 < 100), "a red");
-        assert!(mid.iter().any(|c| c.1 > 200 && c.0 < 100 && c.2 < 100), "a green");
-        assert!(mid.iter().any(|c| c.2 > 200 && c.0 < 100 && c.1 < 100), "a blue");
+        assert_eq!(
+            cells
+                .iter()
+                .find(|(q, r, _)| (*q, *r) == (0, 0))
+                .map(|c| c.2),
+            Some(Rgb::WHITE)
+        );
+        let mid: Vec<Rgb> = cells
+            .iter()
+            .filter(|(q, r, _)| q.abs().max(r.abs()).max((q + r).abs()) == 3)
+            .map(|c| c.2)
+            .collect();
+        assert!(
+            mid.iter().any(|c| c.0 > 200 && c.1 < 100 && c.2 < 100),
+            "a red"
+        );
+        assert!(
+            mid.iter().any(|c| c.1 > 200 && c.0 < 100 && c.2 < 100),
+            "a green"
+        );
+        assert!(
+            mid.iter().any(|c| c.2 > 200 && c.0 < 100 && c.1 < 100),
+            "a blue"
+        );
         let g = greys();
-        assert_eq!((g.first().copied(), g.last().copied()), (Some(Rgb::WHITE), Some(Rgb::BLACK)));
+        assert_eq!(
+            (g.first().copied(), g.last().copied()),
+            (Some(Rgb::WHITE), Some(Rgb::BLACK))
+        );
     }
 
     #[test]
     fn targets_put_the_colour_where_the_command_wants_it() {
-        assert_eq!(Target::cmd("format.color").command("1A2B3C"), Some(("format.color".into(), json!({"color": "1A2B3C"}))));
-        let glow = Target::at("shape.effects", json!({"glow": {"color": null, "size": 8.0}}), "/glow/color");
-        assert_eq!(glow.command("00FF00"), Some(("shape.effects".into(), json!({"glow": {"color": "00FF00", "size": 8.0}}))));
-        assert_eq!(Target::Field(Id::new("x")).command("00FF00"), None);
+        assert_eq!(
+            Target::cmd("format.color").command("1A2B3C"),
+            Some(("format.color".into(), json!({"color": "1A2B3C"})))
+        );
+        let glow = Target::at(
+            "shape.effects",
+            json!({"glow": {"color": null, "size": 8.0}}),
+            "/glow/color",
+        );
+        assert_eq!(
+            glow.command("00FF00"),
+            Some((
+                "shape.effects".into(),
+                json!({"glow": {"color": "00FF00", "size": 8.0}})
+            ))
+        );
+        assert_eq!(Target::Field(Id::unique("x")).command("00FF00"), None);
     }
 
     #[test]
@@ -820,24 +1038,42 @@ mod tests {
     /// first in Recent Colors.
     #[test]
     fn custom_font_color_applies_and_joins_recent_colors() {
-        let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        let mut app = WordApp::new(
+            Session::new(wordcraft_doc::Document::new()),
+            crate::Services::default(),
+        );
         let _ = app.run("document.setText", json!({"text": "Custom colour"}));
         let _ = app.run("select.all", json!({}));
         let _ = app.run("format.color", json!({"color": "112233"}));
         let r = app.run("ui.dialog", json!({"name": "colors"}));
-        assert_eq!(r.ok().and_then(|v| v.get("dialog").cloned()), Some(json!("colors")));
-        assert!(!crate::mini_toolbar::visible(&app), "the mini toolbar stays out of the Colors dialog's way");
-        let mut d = app.colors.take().unwrap_or_else(|| panic!("the Colors dialog opens"));
+        assert_eq!(
+            r.ok().and_then(|v| v.get("dialog").cloned()),
+            Some(json!("colors"))
+        );
+        assert!(
+            !crate::mini_toolbar::visible(&app),
+            "the mini toolbar stays out of the Colors dialog's way"
+        );
+        let mut d = app
+            .colors
+            .take()
+            .unwrap_or_else(|| panic!("the Colors dialog opens"));
         assert_eq!(d.current, Some(Rgb(0x11, 0x22, 0x33)));
         assert!(d.set_text("#7A3EC8"));
         let ctx = egui::Context::default();
         finish(&mut app, &ctx, &d);
-        let st = app.session.run("format.state", &json!({})).unwrap_or_default();
+        let st = app
+            .session
+            .run("format.state", &json!({}))
+            .unwrap_or_default();
         assert_eq!(st.get("color"), Some(&json!("7A3EC8")));
         assert_eq!(app.canvas.last_font_color, "7A3EC8");
-        assert_eq!(app.ui.recent_colors.first().map(String::as_str), Some("7A3EC8"));
+        assert_eq!(
+            app.ui.recent_colors.first().map(String::as_str),
+            Some("7A3EC8")
+        );
         // A dialog field gets the colour back instead.
-        let id = Id::new("field");
+        let id = Id::unique("field");
         d.target = Target::Field(id);
         finish(&mut app, &ctx, &d);
         let mut value = String::new();

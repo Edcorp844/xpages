@@ -64,7 +64,12 @@ impl Host for AppHost<'_> {
 }
 
 /// Handle `ui.zotero.*`. `None` when `id` isn't one.
-pub fn command(app: &mut WordApp, id: &str, params: &Value, ctx: Option<&egui::Context>) -> Option<Result<Value, String>> {
+pub fn command(
+    app: &mut WordApp,
+    id: &str,
+    params: &Value,
+    ctx: Option<&egui::Context>,
+) -> Option<Result<Value, String>> {
     let name = id.strip_prefix("ui.zotero.")?;
     if name == "status" {
         return Some(Ok(status(app)));
@@ -77,7 +82,10 @@ pub fn command(app: &mut WordApp, id: &str, params: &Value, ctx: Option<&egui::C
     }
     let Some(cmd) = Command::from_name(name) else {
         let names: Vec<&str> = Command::ALL.iter().map(|c| c.wire_name()).collect();
-        return Some(Err(format!("unknown Zotero command `{name}`; use one of {}", names.join(", "))));
+        return Some(Err(format!(
+            "unknown Zotero command `{name}`; use one of {}",
+            names.join(", ")
+        )));
     };
     Some(start(app, cmd, ctx.cloned()))
 }
@@ -96,29 +104,41 @@ fn start(_app: &mut WordApp, _cmd: Command, _ctx: Option<egui::Context>) -> Resu
 fn start(app: &mut WordApp, cmd: Command, ctx: Option<egui::Context>) -> Result<Value, String> {
     use std::sync::mpsc::channel;
     if let Some(b) = app.zotero.busy {
-        return Err(format!("Zotero is still working on {}; finish in Zotero's window first", b.wire_name()));
+        return Err(format!(
+            "Zotero is still working on {}; finish in Zotero's window first",
+            b.wire_name()
+        ));
     }
     let document = app.session.document_id();
     let (call_tx, call_rx) = channel::<Pending>();
     let (done_tx, done_rx) = channel();
     let wake = ctx.clone();
     let opts = app.zotero.options.clone();
-    let spawned = std::thread::Builder::new().name("zotero".into()).spawn(move || {
-        let r = wordcraft_zotero::client::run_command(&opts, cmd, &mut |call| {
-            let (tx, rx) = channel();
-            if call_tx.send(Pending { call: call.clone(), reply: tx }).is_err() {
-                return Err("WordCraft closed the document".into());
-            }
+    let spawned = std::thread::Builder::new()
+        .name("zotero".into())
+        .spawn(move || {
+            let r = wordcraft_zotero::client::run_command(&opts, cmd, &mut |call| {
+                let (tx, rx) = channel();
+                if call_tx
+                    .send(Pending {
+                        call: call.clone(),
+                        reply: tx,
+                    })
+                    .is_err()
+                {
+                    return Err("WordCraft closed the document".into());
+                }
+                if let Some(c) = &wake {
+                    c.request_repaint();
+                }
+                rx.recv()
+                    .unwrap_or_else(|_| Err("WordCraft closed the document".into()))
+            });
+            let _ = done_tx.send(r.map_err(|e| e.to_string()));
             if let Some(c) = &wake {
                 c.request_repaint();
             }
-            rx.recv().unwrap_or_else(|_| Err("WordCraft closed the document".into()))
         });
-        let _ = done_tx.send(r.map_err(|e| e.to_string()));
-        if let Some(c) = &wake {
-            c.request_repaint();
-        }
-    });
     if let Err(e) = spawned {
         return Err(format!("could not start the Zotero connection: {e}"));
     }
@@ -134,7 +154,9 @@ fn start(app: &mut WordApp, cmd: Command, ctx: Option<egui::Context>) -> Result<
 
 /// Answer the question Zotero is waiting on with `button` (Zotero's numbering).
 pub fn answer(app: &mut WordApp, button: i64) -> Result<Value, String> {
-    let Some(a) = app.zotero.alert.take() else { return Err("Zotero isn't asking anything".into()) };
+    let Some(a) = app.zotero.alert.take() else {
+        return Err("Zotero isn't asking anything".into());
+    };
     let max = match a.buttons {
         3 => 2,
         _ => 1,
@@ -159,23 +181,42 @@ pub fn poll(app: &mut WordApp, ctx: &egui::Context) {
     let mut changed = false;
     // One alert at a time: Zotero sends nothing else while it waits for the answer.
     while app.zotero.alert.is_none() {
-        let Some(p) = app.zotero.calls.as_ref().and_then(|rx| rx.try_recv().ok()) else { break };
-        if p.call.method == "Document_displayAlert" && app.session.document_id() == app.zotero.document {
-            let text = p.call.args.get(1).and_then(Value::as_str).unwrap_or("").to_string();
+        let Some(p) = app.zotero.calls.as_ref().and_then(|rx| rx.try_recv().ok()) else {
+            break;
+        };
+        if p.call.method == "Document_displayAlert"
+            && app.session.document_id() == app.zotero.document
+        {
+            let text = p
+                .call
+                .args
+                .get(1)
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
             let buttons = p.call.args.get(3).and_then(Value::as_i64).unwrap_or(0);
             app.zotero.methods.push(p.call.method.clone());
-            app.zotero.alert = Some(Alert { text, buttons, reply: p.reply });
+            app.zotero.alert = Some(Alert {
+                text,
+                buttons,
+                reply: p.reply,
+            });
             continue;
         }
         app.zotero.methods.push(p.call.method.clone());
         if app.session.document_id() != app.zotero.document {
             // New or Open replaced the document this command started in: its edits must not land in the new one.
-            let _ = p.reply.send(Err("WordCraft replaced the document this command started in".into()));
+            let _ = p.reply.send(Err(
+                "WordCraft replaced the document this command started in".into(),
+            ));
             continue;
         }
         let rev = app.session.rev();
         let mut host = AppHost { ctx };
-        let r = app.zotero.bridge.handle(&mut app.session, &mut host, &p.call);
+        let r = app
+            .zotero
+            .bridge
+            .handle(&mut app.session, &mut host, &p.call);
         changed |= app.session.rev() != rev || p.call.method == "Field_select";
         let _ = p.reply.send(r);
     }
@@ -194,16 +235,30 @@ pub fn poll(app: &mut WordApp, ctx: &egui::Context) {
         match &r {
             Ok(o) => log::info!(
                 "Zotero: {name} {} after {} calls ({methods}){}",
-                if o.completed { "completed" } else { "ended without completing" },
+                if o.completed {
+                    "completed"
+                } else {
+                    "ended without completing"
+                },
                 o.calls,
-                if o.errors.is_empty() { String::new() } else { format!("; errors: {}", o.errors.join(" | ")) }
+                if o.errors.is_empty() {
+                    String::new()
+                } else {
+                    format!("; errors: {}", o.errors.join(" | "))
+                }
             ),
             Err(e) => log::warn!("Zotero: {name} failed: {e}"),
         }
         match r {
             Ok(o) => {
-                app.zotero.last = Some(json!({"command": name, "completed": o.completed, "calls": o.calls, "errors": o.errors}));
-                app.status(if o.completed { tl!("Zotero: done") } else { tl!("Zotero: cancelled") });
+                app.zotero.last = Some(
+                    json!({"command": name, "completed": o.completed, "calls": o.calls, "errors": o.errors}),
+                );
+                app.status(if o.completed {
+                    tl!("Zotero: done")
+                } else {
+                    tl!("Zotero: cancelled")
+                });
             }
             Err(e) => {
                 app.zotero.last = Some(json!({"command": name, "error": e}));
@@ -216,7 +271,9 @@ pub fn poll(app: &mut WordApp, ctx: &egui::Context) {
 
 /// Zotero's question, as a dialog.
 pub fn show_alert(app: &mut WordApp, ctx: &egui::Context) {
-    let Some(a) = app.zotero.alert.as_ref() else { return };
+    let Some(a) = app.zotero.alert.as_ref() else {
+        return;
+    };
     // Buttons and the value Zotero expects for each.
     // macOS puts the default button last (rightmost), with Cancel just before it.
     let buttons: &[(&str, i64)] = match (a.buttons, cfg!(target_os = "macos")) {
@@ -230,7 +287,7 @@ pub fn show_alert(app: &mut WordApp, ctx: &egui::Context) {
     };
     let mut picked = None;
     egui::Window::new("Zotero")
-        .id(egui::Id::new("zotero-alert"))
+        .id(egui::Id::unique("zotero-alert"))
         .collapsible(false)
         .resizable(false)
         .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, -40.0))
@@ -264,7 +321,9 @@ mod tests {
     use crate::{Services, WordApp};
 
     /// A fake Zotero making `calls`; returns the replies.
-    fn fake_zotero(calls: Vec<Value>) -> (std::net::SocketAddr, std::thread::JoinHandle<Vec<String>>) {
+    fn fake_zotero(
+        calls: Vec<Value>,
+    ) -> (std::net::SocketAddr, std::thread::JoinHandle<Vec<String>>) {
         let l = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = l.local_addr().unwrap();
         let h = std::thread::spawn(move || {
@@ -273,7 +332,9 @@ mod tests {
             let mut replies = Vec::new();
             for (i, c) in calls.into_iter().enumerate() {
                 wire::write_frame(&mut s, 1 + i as u32, &serde_json::to_vec(&c).unwrap()).unwrap();
-                replies.push(String::from_utf8(wire::read_frame(&mut s).unwrap().unwrap().payload).unwrap());
+                replies.push(
+                    String::from_utf8(wire::read_frame(&mut s).unwrap().unwrap().payload).unwrap(),
+                );
             }
             replies
         });
@@ -302,23 +363,41 @@ mod tests {
             json!(["Field_setText", [1, 1, "{\\rtf (Doe, {\\i 2020})}", true]]),
             json!(["Document_complete", [1]]),
         ]);
-        let mut app = WordApp::new(Session::new(Document::from_text("Cite: ")), Services::default());
+        let mut app = WordApp::new(
+            Session::new(Document::from_text("Cite: ")),
+            Services::default(),
+        );
         app.session.sel = wordcraft_engine::Selection::caret(wordcraft_doc::Pos::body(0, 6));
         app.zotero.options.addr = addr;
         let ctx = egui::Context::default();
         app.ctx = Some(ctx.clone());
-        assert_eq!(app.run("ui.zotero.addEditCitation", json!({})).unwrap(), json!({"started": "addEditCitation"}));
-        assert!(app.run("ui.zotero.refresh", json!({})).is_err(), "one session at a time");
+        assert_eq!(
+            app.run("ui.zotero.addEditCitation", json!({})).unwrap(),
+            json!({"started": "addEditCitation"})
+        );
+        assert!(
+            app.run("ui.zotero.refresh", json!({})).is_err(),
+            "one session at a time"
+        );
         pump(&mut app, &ctx, |a| a.zotero.alert.is_some());
         let st = app.run("ui.zotero.status", json!({})).unwrap();
         assert_eq!(st["waitingForAnswer"], "Keep going?");
         assert!(app.run("ui.zotero.answer", json!({"button": 7})).is_err());
-        assert_eq!(app.run("ui.zotero.answer", json!({"button": 1})).unwrap(), json!({"answered": 1}));
+        assert_eq!(
+            app.run("ui.zotero.answer", json!({"button": 1})).unwrap(),
+            json!({"answered": 1})
+        );
         pump(&mut app, &ctx, |a| a.zotero.busy.is_none());
         let replies = server.join().unwrap();
         assert_eq!(replies[3], "1");
-        assert_eq!(app.session.doc.plain_text(StoryRef::Body), "Cite: (Doe, 2020)");
-        assert_eq!(app.run("ui.zotero.status", json!({})).unwrap()["last"]["completed"], true);
+        assert_eq!(
+            app.session.doc.plain_text(StoryRef::Body),
+            "Cite: (Doe, 2020)"
+        );
+        assert_eq!(
+            app.run("ui.zotero.status", json!({})).unwrap()["last"]["completed"],
+            true
+        );
         assert!(app.run("ui.zotero.answer", json!({"button": 1})).is_err());
         assert!(app.run("ui.zotero.nope", json!({})).is_err());
         // One undo step.
@@ -344,18 +423,30 @@ mod tests {
         pump(&mut app, &ctx, |a| a.zotero.busy.is_none());
         server.join().unwrap();
         assert_eq!(app.session.doc.plain_text(StoryRef::Body), "");
-        assert!(!app.session.can_undo(), "the old command left no undo step in the new document");
+        assert!(
+            !app.session.can_undo(),
+            "the old command left no undo step in the new document"
+        );
     }
 
     #[test]
     fn no_zotero_is_a_clear_error() {
-        let free = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap();
+        let free = TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap();
         let mut app = WordApp::new(Session::new(Document::new()), Services::default());
         app.zotero.options.addr = free;
         let ctx = egui::Context::default();
         app.run("ui.zotero.refresh", json!({})).unwrap();
         pump(&mut app, &ctx, |a| a.zotero.busy.is_none());
         let last = app.run("ui.zotero.status", json!({})).unwrap()["last"].clone();
-        assert!(last["error"].as_str().unwrap().contains("Zotero isn't running"), "{last}");
+        assert!(
+            last["error"]
+                .as_str()
+                .unwrap()
+                .contains("Zotero isn't running"),
+            "{last}"
+        );
     }
 }

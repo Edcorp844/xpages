@@ -75,30 +75,49 @@ impl PrintSettings {
     }
 }
 
-const RANGES: [(&str, &str); 4] = [("all", "All pages"), ("current", "Current page"), ("selection", "Selected pages"), ("custom", "Custom range")];
-const PARITIES: [(&str, &str); 3] = [("all", "All pages in the range"), ("odd", "Odd pages only"), ("even", "Even pages only")];
+const RANGES: [(&str, &str); 4] = [
+    ("all", "All pages"),
+    ("current", "Current page"),
+    ("selection", "Selected pages"),
+    ("custom", "Custom range"),
+];
+const PARITIES: [(&str, &str); 3] = [
+    ("all", "All pages in the range"),
+    ("odd", "Odd pages only"),
+    ("even", "Even pages only"),
+];
 /// The Scale to paper size choice that keeps each page's own size.
 const NO_SCALING: &str = "none";
-const ORIENTATIONS: [(&str, &str); 3] = [("auto", "Auto orientation"), ("portrait", "Portrait"), ("landscape", "Landscape")];
+const ORIENTATIONS: [(&str, &str); 3] = [
+    ("auto", "Auto orientation"),
+    ("portrait", "Portrait"),
+    ("landscape", "Landscape"),
+];
 
 /// A choice list over `(id, label)` pairs; true when the choice changed.
 fn choice(ui: &mut Ui, salt: &str, current: &mut String, items: &[(&str, &str)]) -> bool {
-    let shown = items.iter().find(|(id, _)| *id == current.as_str()).map_or("", |(_, l)| *l);
+    let shown = items
+        .iter()
+        .find(|(id, _)| *id == current.as_str())
+        .map_or("", |(_, l)| *l);
     let mut changed = false;
-    egui::ComboBox::from_id_salt(salt).width(260.0).selected_text(tl!(shown)).show_ui(ui, |ui| {
-        for (id, label) in items {
-            if ui.selectable_label(current == id, tl!(label)).clicked() && current != id {
-                *current = (*id).to_string();
-                changed = true;
+    egui::ComboBox::from_id_salt(salt)
+        .width(260.0)
+        .selected_text(tl!(shown))
+        .show_ui(ui, |ui| {
+            for (id, label) in items {
+                if ui.selectable_label(current == id, tl!(label)).clicked() && current != id {
+                    *current = (*id).to_string();
+                    changed = true;
+                }
             }
-        }
-    });
+        });
     changed
 }
 
 /// The output layout, kept while the document is unchanged (laying out every frame would be slow).
 fn layout_of(app: &WordApp, ctx: &egui::Context) -> Arc<DocLayout> {
-    let id = egui::Id::new("print_page_layout");
+    let id = egui::Id::unique("print_page_layout");
     let rev = app.session.rev();
     if let Some((r, l)) = ctx.data(|d| d.get_temp::<(u64, Arc<DocLayout>)>(id))
         && r == rev
@@ -111,9 +130,20 @@ fn layout_of(app: &WordApp, ctx: &egui::Context) -> Arc<DocLayout> {
 }
 
 /// The texture of one page, re-rendered only when the document, page or size changes.
-fn page_texture(app: &WordApp, ctx: &egui::Context, lay: &DocLayout, page: usize, width: f32) -> Option<TextureHandle> {
-    let id = egui::Id::new("print_page_texture");
-    let key = (app.session.rev(), page, width as u32, (ctx.pixels_per_point() * 100.0) as u32);
+fn page_texture(
+    app: &WordApp,
+    ctx: &egui::Context,
+    lay: &DocLayout,
+    page: usize,
+    width: f32,
+) -> Option<TextureHandle> {
+    let id = egui::Id::unique("print_page_texture");
+    let key = (
+        app.session.rev(),
+        page,
+        width as u32,
+        (ctx.pixels_per_point() * 100.0) as u32,
+    );
     if let Some((k, t)) = ctx.data(|d| d.get_temp::<((u64, usize, u32, u32), TextureHandle)>(id))
         && k == key
     {
@@ -122,9 +152,14 @@ fn page_texture(app: &WordApp, ctx: &egui::Context, lay: &DocLayout, page: usize
     let pg = lay.pages.get(page)?;
     // Zoomed in, the texture stays within what the GPU takes and is stretched beyond that.
     let max_side = ctx.input(|i| i.max_texture_side) as f32 / pg.w.max(pg.h).max(1.0);
-    let scale = (width / pg.w.max(1.0) * ctx.pixels_per_point()).clamp(0.05, 4.0).min(max_side);
+    let scale = (width / pg.w.max(1.0) * ctx.pixels_per_point())
+        .clamp(0.05, 4.0)
+        .min(max_side);
     let img = wordcraft_render::render_page(&app.session.doc, pg, scale, &Default::default());
-    let color = egui::ColorImage::from_rgba_unmultiplied([img.width as usize, img.height as usize], &img.to_straight());
+    let color = egui::ColorImage::from_rgba_unmultiplied(
+        [img.width as usize, img.height as usize],
+        &img.to_straight(),
+    );
     let tex = ctx.load_texture("print_page_preview", color, egui::TextureOptions::LINEAR);
     ctx.data_mut(|d| d.insert_temp(id, (key, tex.clone())));
     Some(tex)
@@ -261,34 +296,81 @@ fn preview(app: &mut WordApp, ui: &mut Ui, lay: &DocLayout, total: usize) {
     let t = Tokens::get(ui.ctx());
     let ctx = ui.ctx().clone();
     let page = app.ui.print.preview;
-    let (page_w, page_h) = lay.pages.get(page).map_or((612.0, 792.0), |p| (p.w.max(1.0), p.h.max(1.0)));
+    let (page_w, page_h) = lay
+        .pages
+        .get(page)
+        .map_or((612.0, 792.0), |p| (p.w.max(1.0), p.h.max(1.0)));
     // Scale to paper size: the sheet is the chosen paper with the page scaled and centred on it.
-    let sheet = app.ui.print.paper_size().map(|(w, h)| wordcraft_geom::fit_to_paper(page_w, page_h, w, h));
+    let sheet = app
+        .ui
+        .print
+        .paper_size()
+        .map(|(w, h)| wordcraft_geom::fit_to_paper(page_w, page_h, w, h));
     let (pw, ph) = sheet.map_or((page_w, page_h), |f| (f.paper_w, f.paper_h));
-    let pane = vec2(ui.available_width().max(120.0), (ui.available_height() - PREVIEW_BAR).max(120.0));
+    let pane = vec2(
+        ui.available_width().max(120.0),
+        (ui.available_height() - PREVIEW_BAR).max(120.0),
+    );
     // Screen points per page point.
-    let fit = ((pane.x - 2.0 * PREVIEW_MARGIN) / pw).min((pane.y - 2.0 * PREVIEW_MARGIN) / ph).max(0.01);
-    let scale = app.ui.print.zoom.map_or(fit, |z| z * crate::canvas::PX_PER_PT);
+    let fit = ((pane.x - 2.0 * PREVIEW_MARGIN) / pw)
+        .min((pane.y - 2.0 * PREVIEW_MARGIN) / ph)
+        .max(0.01);
+    let scale = app
+        .ui
+        .print
+        .zoom
+        .map_or(fit, |z| z * crate::canvas::PX_PER_PT);
     let size = vec2(pw * scale, ph * scale);
-    let label = crate::i18n::fmt(tl!("Page {page} of {pages}"), &[("page", &(page + 1).to_string()), ("pages", &total.to_string())]);
-    egui::ScrollArea::both().id_salt("print_preview").auto_shrink(false).max_width(pane.x).max_height(pane.y).show(ui, |ui| {
-        let room = vec2((size.x + 2.0 * PREVIEW_MARGIN).max(ui.available_width()), (size.y + 2.0 * PREVIEW_MARGIN).max(ui.available_height()));
-        let (area, _) = ui.allocate_exact_size(room, Sense::hover());
-        let r = Rect::from_center_size(area.center(), size);
-        let resp = ui.interact(r, ui.id().with("print_preview_page"), Sense::hover());
-        resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Image, true, &label));
-        ui.painter().rect_filled(r.translate(vec2(2.0, 3.0)), 0.0, t.page_shadow);
-        ui.painter().rect(r, 0.0, egui::Color32::WHITE, Stroke::new(1.0, t.border_strong), egui::StrokeKind::Inside);
-        let on_sheet = sheet.map_or(r, |f| Rect::from_min_size(r.min + vec2(f.dx, f.dy) * scale, vec2(page_w, page_h) * f.k * scale));
-        if let Some(tex) = page_texture(app, &ctx, lay, page, on_sheet.width()) {
-            ui.painter().image(tex.id(), on_sheet, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), egui::Color32::WHITE);
-        }
-    });
+    let label = crate::i18n::fmt(
+        tl!("Page {page} of {pages}"),
+        &[
+            ("page", &(page + 1).to_string()),
+            ("pages", &total.to_string()),
+        ],
+    );
+    egui::ScrollArea::both()
+        .id_salt("print_preview")
+        .auto_shrink(false)
+        .max_width(pane.x)
+        .max_height(pane.y)
+        .show(ui, |ui| {
+            let room = vec2(
+                (size.x + 2.0 * PREVIEW_MARGIN).max(ui.available_width()),
+                (size.y + 2.0 * PREVIEW_MARGIN).max(ui.available_height()),
+            );
+            let (area, _) = ui.allocate_exact_size(room, Sense::hover());
+            let r = Rect::from_center_size(area.center(), size);
+            let resp = ui.interact(r, ui.scope_id().with("print_preview_page"), Sense::hover());
+            resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Image, true, &label));
+            ui.painter()
+                .rect_filled(r.translate(vec2(2.0, 3.0)), 0.0, t.page_shadow);
+            ui.painter().rect(
+                r,
+                0.0,
+                egui::Color32::WHITE,
+                Stroke::new(1.0, t.border_strong),
+                egui::StrokeKind::Inside,
+            );
+            let on_sheet = sheet.map_or(r, |f| {
+                Rect::from_min_size(
+                    r.min + vec2(f.dx, f.dy) * scale,
+                    vec2(page_w, page_h) * f.k * scale,
+                )
+            });
+            if let Some(tex) = page_texture(app, &ctx, lay, page, on_sheet.width()) {
+                ui.painter().image(
+                    tex.id(),
+                    on_sheet,
+                    Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
+                    egui::Color32::WHITE,
+                );
+            }
+        });
     ui.horizontal(|ui| {
         ui.set_height(PREVIEW_BAR);
         let nav = |ui: &mut Ui, icon: &str, tip: &str, enabled: bool| {
             let (r, resp) = ui.allocate_exact_size(vec2(26.0, 26.0), Sense::click());
-            resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, tip));
+            resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, tip));
             let col = if enabled { t.icon } else { t.text_disabled };
             if enabled && resp.hovered() {
                 ui.painter().rect_filled(r, 3.0, t.hover);
@@ -317,7 +399,15 @@ fn preview(app: &mut WordApp, ui: &mut Ui, lay: &DocLayout, total: usize) {
             if room >= 40.0 {
                 let mut v = z;
                 ui.spacing_mut().slider_width = room.min(110.0);
-                if ui.add(egui::Slider::new(&mut v, 0.1..=5.0).logarithmic(true).show_value(false)).on_hover_text(tl!("Zoom")).changed() {
+                if ui
+                    .add(
+                        egui::Slider::new(&mut v, 0.1..=5.0)
+                            .logarithmic(true)
+                            .show_value(false),
+                    )
+                    .on_hover_text(tl!("Zoom"))
+                    .changed()
+                {
                     app.ui.print.zoom = Some(v.clamp(0.1, 5.0));
                 }
             }
@@ -346,7 +436,13 @@ pub fn export_formats(app: &mut WordApp, ui: &mut Ui) {
         ("Plain text (*.txt)", "txt"),
         ("Page image (*.png)", "png"),
     ] {
-        if ui.add(egui::Button::new(egui::RichText::new(tl!(label)).font(medium(13.5))).min_size(vec2(320.0, 34.0))).clicked() {
+        if ui
+            .add(
+                egui::Button::new(egui::RichText::new(tl!(label)).font(medium(13.5)))
+                    .min_size(vec2(320.0, 34.0)),
+            )
+            .clicked()
+        {
             app.export_dialog(ext);
         }
         ui.add_space(4.0);
