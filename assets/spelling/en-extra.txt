@@ -106,6 +106,7 @@ javascript
 kickstart
 kilobyte
 laptop
+LibreOffice
 lifestyle
 linkedin
 linux

@@ -4,15 +4,13 @@
 //! - Page view: Session.layout() → wordcraft_render::render_page → egui textures
 //! - Scroll background follows Adwaita light/dark
 //! - Pages are centered; sidebar thumbnails jump the scroll to that page
-//!
-//! EguiArea::set_ui must receive `&mut egui::Ui` (egui 0.37 `run_ui`).
-//! Do not call `Context::root_ui` from that callback.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Once;
+use std::time::{Duration, Instant};
 
 use relm4::{adw, adw::prelude::*, prelude::*};
 use serde_json::json;
@@ -33,13 +31,40 @@ fn adwaita_is_dark() -> bool {
     adw::StyleManager::default().is_dark()
 }
 
-/// Adwaita window_bg-ish color for the egui scroll area (not the page paper).
-fn adwaita_window_bg(is_dark: bool) -> egui::Color32 {
-    if is_dark {
-        egui::Color32::from_rgb(0x24, 0x24, 0x24)
-    } else {
-        egui::Color32::from_rgb(0xfa, 0xfa, 0xfa)
-    }
+/// Make every egui background fully transparent so the Adwaita window color behind
+/// the egui area shows through. The page paper itself is still drawn by the page
+/// texture, so documents remain readable.
+fn transparent_visuals(dark: bool) -> egui::Visuals {
+    let mut v = if dark { egui::Visuals::dark() } else { egui::Visuals::light() };
+    let clear = egui::Color32::TRANSPARENT;
+
+    v.panel_fill = clear;
+    v.window_fill = clear;
+    v.extreme_bg_color = clear;
+    v.faint_bg_color = clear;
+    v.code_bg_color = clear;
+
+    v.widgets.noninteractive.bg_fill = clear;
+    v.widgets.inactive.bg_fill = clear;
+
+    v
+}
+
+/// Mix (pages, scale_px, rev, ppp) into one u64 via FNV-1a, so any change in
+/// document revision, zoom, or display DPI invalidates the cached page texture.
+fn texture_key(pages: usize, scale_px: f32, rev: u64, ppp: f32) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    let mut mix = |bytes: &[u8]| {
+        for &b in bytes {
+            h ^= b as u64;
+            h = h.wrapping_mul(0x100_0000_01b3);
+        }
+    };
+    mix(&(pages as u64).to_le_bytes());
+    mix(&scale_px.to_le_bytes());
+    mix(&rev.to_le_bytes());
+    mix(&ppp.to_le_bytes());
+    h
 }
 
 // ---------------------------------------------------------------------------
@@ -120,18 +145,112 @@ fn page_to_texture(
 }
 
 // ---------------------------------------------------------------------------
+// Keyboard
+// ---------------------------------------------------------------------------
+fn handle_editing(
+    ui: &mut egui::Ui,
+    session: &mut wordcraft_engine::Session,
+    canvas: &mut DocCanvas,
+    _focus_id: egui::Id,
+) -> bool {
+    if !canvas.editing {
+        return false;
+    }
+
+    let mut edited = false;
+    let mut caret_moved = false;
+    let events: Vec<_> = ui.input(|i| i.events.clone());
+
+    for ev in events {
+        match ev {
+            egui::Event::Text(t) if !t.is_empty() => {
+                match session.run("text.insert", &json!({ "text": t })) {
+                    Ok(_) => edited = true,
+                    Err(e) => eprintln!("text.insert: {e:?}"),
+                }
+            }
+            egui::Event::Key { key: egui::Key::Backspace, pressed: true, .. } => {
+                match session.run("text.backspace", &json!({})) {
+                    Ok(_) => edited = true,
+                    Err(e) => eprintln!("backspace: {e:?}"),
+                }
+            }
+            egui::Event::Key { key: egui::Key::Delete, pressed: true, .. } => {
+                match session.run("text.delete", &json!({})) {
+                    Ok(_) => edited = true,
+                    Err(e) => eprintln!("delete: {e:?}"),
+                }
+            }
+            egui::Event::Key { key: egui::Key::Enter, pressed: true, modifiers, .. } => {
+                let id = if modifiers.shift { "text.lineBreak" } else { "text.newParagraph" };
+                match session.run(id, &json!({})) {
+                    Ok(_) => edited = true,
+                    Err(e) => eprintln!("{id}: {e:?}"),
+                }
+            }
+            egui::Event::Key { key: egui::Key::ArrowLeft, pressed: true, modifiers, .. } => {
+                caret_moved = true;
+                let _ = session.run("caret.left", &json!({ "extend": modifiers.shift }));
+                ui.ctx().request_repaint();
+            }
+            egui::Event::Key { key: egui::Key::ArrowRight, pressed: true, modifiers, .. } => {
+                caret_moved = true;
+                let _ = session.run("caret.right", &json!({ "extend": modifiers.shift }));
+                ui.ctx().request_repaint();
+            }
+            egui::Event::Key { key: egui::Key::ArrowUp, pressed: true, modifiers, .. } => {
+                caret_moved = true;
+                let _ = session.run("caret.up", &json!({ "extend": modifiers.shift }));
+                ui.ctx().request_repaint();
+            }
+            egui::Event::Key { key: egui::Key::ArrowDown, pressed: true, modifiers, .. } => {
+                caret_moved = true;
+                let _ = session.run("caret.down", &json!({ "extend": modifiers.shift }));
+                ui.ctx().request_repaint();
+            }
+            egui::Event::Key { key: egui::Key::Home, pressed: true, modifiers, .. } => {
+                caret_moved = true;
+                let id = if modifiers.ctrl { "caret.docStart" } else { "caret.home" };
+                let _ = session.run(id, &json!({ "extend": modifiers.shift }));
+                ui.ctx().request_repaint();
+            }
+            egui::Event::Key { key: egui::Key::End, pressed: true, modifiers, .. } => {
+                caret_moved = true;
+                let id = if modifiers.ctrl { "caret.docEnd" } else { "caret.end" };
+                let _ = session.run(id, &json!({ "extend": modifiers.shift }));
+                ui.ctx().request_repaint();
+            }
+            _ => {}
+        }
+    }
+
+    if edited || caret_moved {
+        canvas.caret_blink_reset();
+    }
+    edited
+}
+
+// ---------------------------------------------------------------------------
 // Canvas
 // ---------------------------------------------------------------------------
-
 struct DocCanvas {
-    /// page index → (cache key, texture)
     textures: HashMap<usize, (u64, egui::TextureHandle)>,
+    generation: u64,
+    editing: bool,
+    caret_visible: bool,
+    last_blink: Instant,
+    last_ppp: f32,
 }
 
 impl Default for DocCanvas {
     fn default() -> Self {
         Self {
             textures: HashMap::new(),
+            generation: 0,
+            editing: false,
+            caret_visible: true,
+            last_blink: Instant::now(),
+            last_ppp: 1.0,
         }
     }
 }
@@ -139,6 +258,19 @@ impl Default for DocCanvas {
 impl DocCanvas {
     fn clear(&mut self) {
         self.textures.clear();
+        self.generation = self.generation.wrapping_add(1);
+    }
+
+    fn caret_blink_reset(&mut self) {
+        self.caret_visible = true;
+        self.last_blink = Instant::now();
+    }
+
+    fn caret_blink_tick(&mut self) {
+        if self.last_blink.elapsed() >= Duration::from_millis(500) {
+            self.caret_visible = !self.caret_visible;
+            self.last_blink = Instant::now();
+        }
     }
 
     fn show(
@@ -147,12 +279,49 @@ impl DocCanvas {
         session: &mut wordcraft_engine::Session,
         zoom: f32,
         scroll_to_page: &mut Option<usize>,
+        focus_id: egui::Id,
     ) {
-        let layout = session.layout();
-        let scale_px = (zoom * PX_PER_PT).max(0.25);
-        let base_key = (layout.pages.len() as u64) ^ ((scale_px.to_bits() as u64) << 16);
+        let ppp = ui.ctx().pixels_per_point();
 
+        // When the effective scale changes (Large Text toggled, monitor moved),
+        // reset scroll so the top of the current page stays visible.
+        if (self.last_ppp - ppp).abs() > 0.001 {
+            self.last_ppp = ppp;
+            if scroll_to_page.is_none() {
+                *scroll_to_page = Some(session.page_hint);
+            }
+        }
+
+        let rev = session.rev();
+        let layout = session.layout();
+
+        // Logical scale: how many egui points one document point occupies.
+        // This is the coordinate system used for click mapping below.
+        let logical_scale = zoom * PX_PER_PT;
+
+        // Render scale: how many physical pixels one document point occupies.
+        // Used to generate textures at native physical resolution (sharp text).
+        let render_scale = (logical_scale * ppp).max(0.25);
+
+        let base_key = texture_key(layout.pages.len(), render_scale, rev, ppp);
         let target = scroll_to_page.take();
+
+        self.caret_blink_tick();
+        if self.editing {
+            ui.ctx().request_repaint_after(Duration::from_millis(500));
+            ui.memory_mut(|m| m.request_focus(focus_id));
+        }
+
+        let caret_hint = session.page_hint;
+        let caret = layout.caret_on(&session.sel.focus, caret_hint);
+        let caret_page = caret.as_ref().map(|c| c.page);
+
+        let (sel_a, sel_b) = session.sel.ordered();
+        let selection_rects = if session.sel.is_collapsed() {
+            Vec::new()
+        } else {
+            layout.selection_rects(&session.doc, &sel_a, &sel_b, caret_hint)
+        };
 
         egui::ScrollArea::both()
             .id_salt("doc_scroll")
@@ -161,19 +330,26 @@ impl DocCanvas {
                 ui.set_min_width(ui.available_width());
 
                 for (i, page) in layout.pages.iter().enumerate() {
-                    let screen_w = page.w * scale_px;
-                    let screen_h = page.h * scale_px;
-                    let row_w = ui.available_width().max(screen_w + 32.0);
-                    let row_h = screen_h + PAGE_GAP;
+                    // On-screen size of the page in egui points. This is what
+                    // the click mapping uses, so it must be exactly
+                    // page.w * logical_scale.
+                    let screen_w = page.w * logical_scale;
+                    let screen_h = page.h * logical_scale;
 
-                    let (response, painter) =
-                        ui.allocate_painter(egui::vec2(row_w, row_h), egui::Sense::click());
+                    let row_h = screen_h + PAGE_GAP;
+                    let row_w = ui.available_width().max(screen_w + 64.0);
+
+                    let (response, painter) = ui.allocate_painter(
+                        egui::vec2(row_w, row_h),
+                        egui::Sense::click_and_drag(),
+                    );
 
                     if target == Some(i) {
                         response.scroll_to_me(Some(egui::Align::TOP));
                     }
 
-                    // Centered page
+                    // Centre the page in the row, exactly as before. No
+                    // snapping, no pixel-alignment offset.
                     let page_rect = egui::Rect::from_center_size(
                         egui::pos2(
                             response.rect.center().x,
@@ -182,6 +358,49 @@ impl DocCanvas {
                         egui::vec2(screen_w, screen_h),
                     );
 
+                    // --- cursor icon ----------------------------------------
+                    let pointer_over_page = ui
+                        .ctx()
+                        .pointer_hover_pos()
+                        .map_or(false, |p| page_rect.contains(p));
+                    if pointer_over_page {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
+                    }
+
+                    // --- click → caret --------------------------------------
+                    if response.clicked() || response.drag_started() {
+                        if let Some(pos) = response.interact_pointer_pos() {
+                            if page_rect.contains(pos) {
+                                self.editing = true;
+                                ui.memory_mut(|m| m.request_focus(focus_id));
+
+                                // Map screen position to document points using
+                                // the same logical_scale as the page rect. This
+                                // is the coordinate contract that must not
+                                // change; it's what makes the caret land where
+                                // you click.
+                                let local = (pos - page_rect.min) / logical_scale;
+
+                                let story: wordcraft_doc::StoryRef = layout
+                                    .story_at(i, local.x, local.y)
+                                    .unwrap_or(wordcraft_doc::StoryRef::Body);
+
+                                if let Some(hit) = layout.hit(i, local.x, local.y, story) {
+                                    let extend = ui.input(|m| m.modifiers.shift);
+                                    let _ = session.run(
+                                        "caret.set",
+                                        &json!({ "pos": hit, "extend": extend }),
+                                    );
+                                    session.page_hint = i;
+                                    session.close_typing();
+                                    self.caret_blink_reset();
+                                    ui.ctx().request_repaint();
+                                }
+                            }
+                        }
+                    }
+
+                    // --- page shadow + texture ------------------------------
                     painter.rect_filled(
                         page_rect.translate(egui::vec2(3.0, 3.0)),
                         2.0,
@@ -199,7 +418,7 @@ impl DocCanvas {
                         let img = wordcraft_render::render_page(
                             &session.doc,
                             page,
-                            scale_px,
+                            render_scale,
                             &wordcraft_render::RenderOptions::default(),
                         );
                         let color = egui::ColorImage::from_rgba_premultiplied(
@@ -231,6 +450,39 @@ impl DocCanvas {
                                 egui::pos2(1.0, 1.0),
                             ),
                             egui::Color32::WHITE,
+                        );
+                    }
+
+                    // --- selection ------------------------------------------
+                    let sel_fill =
+                        egui::Color32::from_rgba_unmultiplied(0x30, 0x60, 0xd0, 80);
+                    for (rpage, r) in &selection_rects {
+                        if *rpage != i {
+                            continue;
+                        }
+                        let rr = egui::Rect::from_min_size(
+                            page_rect.min
+                                + egui::vec2(r.x * logical_scale, r.y * logical_scale),
+                            egui::vec2(r.w * logical_scale, r.h * logical_scale),
+                        );
+                        painter.rect_filled(rr, 0.0, sel_fill);
+                    }
+
+                    // --- caret ----------------------------------------------
+                    if self.editing
+                        && self.caret_visible
+                        && caret_page == Some(i)
+                        && let Some(c) = caret.as_ref()
+                    {
+                        let r = egui::Rect::from_min_size(
+                            page_rect.min
+                                + egui::vec2(c.x * logical_scale, c.top * logical_scale),
+                            egui::vec2(c.width.max(1.5), c.height * logical_scale),
+                        );
+                        painter.rect_filled(
+                            r,
+                            0.0,
+                            egui::Color32::from_rgb(0x30, 0x60, 0xd0),
                         );
                     }
 
@@ -272,7 +524,6 @@ struct AppModel {
     subtitle: String,
     status: String,
     page_count: usize,
-    /// Stored so `update` can rebuild sidebar without `update_with_view`.
     thumb_list: Option<gtk::ListBox>,
 }
 
@@ -286,7 +537,7 @@ impl SimpleComponent for AppModel {
         #[name = "window"]
         adw::ApplicationWindow {
             set_title: Some("XPages"),
-            set_default_size: (1100, 720),
+            set_default_size: (1200, 900),
 
             #[wrap(Some)]
             set_content = &adw::OverlaySplitView {
@@ -377,7 +628,6 @@ impl SimpleComponent for AppModel {
 
         let widgets = view_output!();
 
-        // Sidebar click → jump to page (connect once)
         {
             let sender = sender.clone();
             widgets.thumb_list.connect_row_activated(move |_, row| {
@@ -389,7 +639,6 @@ impl SimpleComponent for AppModel {
         }
         model.thumb_list = Some(widgets.thumb_list.clone());
 
-        // Adwaita theme changes
         {
             let is_dark = Rc::clone(&is_dark);
             let sender = sender.clone();
@@ -415,16 +664,10 @@ impl SimpleComponent for AppModel {
             FONTS.call_once(|| setup_cjk_fonts(ui.ctx()));
 
             let dark = *is_dark_for_ui.borrow();
-            let bg = adwaita_window_bg(dark);
-
-            ui.ctx().set_visuals(if dark {
-                egui::Visuals::dark()
-            } else {
-                egui::Visuals::light()
-            });
+            ui.ctx().set_visuals(transparent_visuals(dark));
 
             egui::CentralPanel::default()
-                .frame(egui::Frame::NONE.fill(bg))
+                .frame(egui::Frame::NONE.fill(egui::Color32::TRANSPARENT))
                 .show(ui, |ui| {
                     if !*has_document_for_ui.borrow() {
                         ui.vertical_centered(|ui| {
@@ -439,10 +682,18 @@ impl SimpleComponent for AppModel {
                         return;
                     }
 
+                    let focus_id = egui::Id::unique("doc_focus");
                     let mut session = session_for_ui.borrow_mut();
                     let mut canvas = canvas_for_ui.borrow_mut();
                     let mut target = scroll_for_ui.borrow_mut();
-                    canvas.show(ui, &mut session, DEFAULT_ZOOM, &mut target);
+
+                    let edited = handle_editing(ui, &mut session, &mut canvas, focus_id);
+                    if edited {
+                        canvas.clear();
+                        ui.ctx().request_repaint();
+                    }
+
+                    canvas.show(ui, &mut session, DEFAULT_ZOOM, &mut target, focus_id);
                 });
         });
 
@@ -526,6 +777,7 @@ impl SimpleComponent for AppModel {
                     }
 
                     if let Some(area) = self.egui_area.as_ref() {
+                        area.grab_focus();
                         area.queue_draw();
                     }
                 }
@@ -542,6 +794,7 @@ impl SimpleComponent for AppModel {
             AppMsg::GoToPage(index) => {
                 *self.scroll_to_page.borrow_mut() = Some(index);
                 if let Some(area) = self.egui_area.as_ref() {
+                    area.grab_focus();
                     area.queue_draw();
                 }
             }
@@ -555,7 +808,6 @@ impl SimpleComponent for AppModel {
     }
 }
 
-/// Fill the sidebar with page thumbnails. Row activation is connected once in init.
 fn rebuild_thumb_list(
     list: &gtk::ListBox,
     session: &Rc<RefCell<wordcraft_engine::Session>>,

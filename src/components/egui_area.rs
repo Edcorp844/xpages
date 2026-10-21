@@ -16,23 +16,18 @@ glib::wrapper! {
 }
 
 impl EguiArea {
-    /// The `ui` closure is called every frame (from the GLArea render pass) and
-    /// receives a `&mut egui::Ui` to construct the UI.
     pub fn new(ui: impl Fn(&mut egui::Ui) + 'static) -> Self {
         let area: Self = glib::Object::builder().build();
         area.set_ui(ui);
         area
     }
 
-    /// Create with an FPS cap (frames-per-second). Setting this can reduce CPU
-    /// usage when you don't need continuous high-rate rendering.
     pub fn with_max_fps(ui: impl Fn(&mut egui::Ui) + 'static, max_fps: u32) -> Self {
         let area = Self::new(ui);
         area.set_max_fps(max_fps);
         area
     }
 
-    /// Set a maximum FPS. `None` (default) means render as often as GTK asks.
     pub fn set_max_fps(&self, max_fps: u32) {
         self.imp()
             .min_render_interval
@@ -41,12 +36,10 @@ impl EguiArea {
             )));
     }
 
-    /// Replace the UI closure that will be executed each frame.
     pub fn set_ui(&self, ui: impl Fn(&mut egui::Ui) + 'static) {
         *self.imp().run_ui.borrow_mut() = Some(Box::new(ui));
     }
 
-    // Get a reference to the inner `egui::Context` if you need advanced control.
     pub fn egui_ctx(&self) -> &egui::Context {
         &self.imp().egui_ctx
     }
@@ -66,35 +59,16 @@ mod imp {
 
     type DynGuiFn = Box<dyn Fn(&mut egui::Ui)>;
 
-    /// Implementation struct for the GObject subclass.
     #[derive(Default)]
     pub struct EguiArea {
-        /// The GPU painter from `egui_glow`.
         painter: RefCell<Option<egui_glow::Painter>>,
-
-        /// The egui context we drive every frame.
         pub(super) egui_ctx: egui::Context,
-
-        /// Queue of input events collected from GTK between frames.
         input_events: RefCell<Vec<egui::Event>>,
-
-        /// Optional minimum time between renders (used for FPS limiting).
         pub(super) min_render_interval: Cell<Option<Duration>>,
-
-        /// The user-provided UI closure that runs each frame.
         pub(super) run_ui: RefCell<Option<DynGuiFn>>,
-
-        /// GTK IM context used to support system IMEs (preedit / commit).
         im_context: RefCell<Option<gtk::IMMulticontext>>,
-
-        /// Tracks whether the widget currently has focus (so we can call
-        /// im_context.focus_in/focus_out only on changes).
         focused: Cell<bool>,
-
-        /// Current modifier state (kept so pointer/key events can include modifiers).
         modifiers: Rc<Cell<egui::Modifiers>>,
-
-        /// ID of the tick callback, so we can remove it on unrealize.
         tick_id: RefCell<Option<gtk::TickCallbackId>>,
     }
 
@@ -109,7 +83,6 @@ mod imp {
         fn constructed(&self) {
             self.parent_constructed();
 
-            // Make sure GL symbols are available.
             init_epoxy();
 
             let obj = self.obj().clone();
@@ -118,25 +91,13 @@ mod imp {
             obj.set_hexpand(true);
             obj.set_vexpand(true);
 
-            // Create and configure IM context early so event controllers can use it.
             let im = gtk::IMMulticontext::new();
-            // Ask the IMContext to use preedit strings (so we receive preedit
-            // contents via `preedit_string()` and `commit()` signals).
             im.set_use_preedit(true);
-            // Bind the IM context to this widget so some IMs can position windows
-            // relative to it.
             im.set_client_widget(Some(&obj));
-
-            // Keep a reference for later platform-output handling.
             *self.im_context.borrow_mut() = Some(im.clone());
 
-            // Register all input controllers (pointer, keyboard, scroll, gestures).
             self.register_controllers();
 
-            // When focus changes we must notify IMContext (so e.g. candidate
-            // windows appear/disappear correctly). We track focus changes in the
-            // render pass (where `has_focus()` is always available), but we also
-            // listen to focus events to be robust.
             let im_for_focus = self.im_context.borrow().clone();
             obj.connect_notify_local(Some("has-focus"), move |widget, _pspec| {
                 if let Some(im) = im_for_focus.as_ref() {
@@ -148,7 +109,6 @@ mod imp {
                 }
             });
 
-            // Tick callback: request redraw according to FPS cap.
             let last_render = Cell::new(Instant::now());
             let tick_id = obj.add_tick_callback(move |area, _clock| {
                 let should_render = match area.imp().min_render_interval.get() {
@@ -163,10 +123,8 @@ mod imp {
             });
             *self.tick_id.borrow_mut() = Some(tick_id);
 
-            // Connect IM signals to push egui Ime events.
             if let Some(im) = self.im_context.borrow().as_ref() {
                 let obj = self.obj().downgrade();
-                // `commit` -> final text, send as Ime::Commit
                 im.connect_commit(move |_im, text| {
                     if let Some(obj) = obj.upgrade() {
                         let mut events = obj.imp().input_events.borrow_mut();
@@ -174,10 +132,8 @@ mod imp {
                     };
                 });
 
-                // `preedit-changed` -> read current preedit string and forward it.
                 let obj = self.obj().downgrade();
                 im.connect_preedit_changed(move |im| {
-                    // preedit_string returns (text, attr_list, cursor_pos)
                     let (preedit, _attrs, _pos) = im.preedit_string();
                     if let Some(obj) = obj.upgrade() {
                         let mut events = obj.imp().input_events.borrow_mut();
@@ -187,22 +143,6 @@ mod imp {
                         }));
                     }
                 });
-
-                // // preedit_start/end - forward Enabled/Disabled.
-                // let obj = self.obj().downgrade();
-                // im.connect_preedit_start(move |_im| {
-                //     if let Some(obj) = obj.upgrade() {
-                //         let mut events = obj.imp().input_events.borrow_mut();
-                //         events.push(egui::Event::Ime(egui::ImeEvent::Enabled));
-                //     }
-                // });
-                // let obj = self.obj().downgrade();
-                // im.connect_preedit_end(move |_im| {
-                //     if let Some(obj) = obj.upgrade() {
-                //         let mut events = obj.imp().input_events.borrow_mut();
-                //         events.push(egui::Event::Ime(egui::ImeEvent::Disabled));
-                //     }
-                // });
             }
         }
 
@@ -210,18 +150,14 @@ mod imp {
             if let Some(im) = self.im_context.borrow_mut().take() {
                 im.set_client_widget(None::<&gtk::Widget>);
             }
-            // *self.painter.borrow_mut() = None; // Do it in unrealize()
         }
     }
 
     impl WidgetImpl for EguiArea {
         fn realize(&self) {
             self.parent_realize();
-
-            // Make GL context current and create the egui_glow painter.
             self.obj().make_current();
             let gl = unsafe { glow::Context::from_loader_function(epoxy::get_proc_addr) };
-            // Wrap in Arc as egui_glow::Painter wants a shared GL context.
             let gl = Arc::new(gl);
             *self.painter.borrow_mut() = Some(
                 egui_glow::Painter::new(gl, "", None, true).expect("Failed to create painter"),
@@ -241,134 +177,105 @@ mod imp {
         fn compute_expand(&self, hexpand: &mut bool, vexpand: &mut bool) {
             self.parent_compute_expand(hexpand, vexpand)
         }
-
-        fn contains(&self, x: f64, y: f64) -> bool {
-            self.parent_contains(x, y)
-        }
-
-        fn direction_changed(&self, previous_direction: gtk::TextDirection) {
-            self.parent_direction_changed(previous_direction)
-        }
-
-        fn focus(&self, direction_type: gtk::DirectionType) -> bool {
-            self.parent_focus(direction_type)
-        }
-
-        fn request_mode(&self) -> gtk::SizeRequestMode {
-            self.parent_request_mode()
-        }
-
-        fn grab_focus(&self) -> bool {
-            self.parent_grab_focus()
-        }
-
-        fn keynav_failed(&self, direction_type: gtk::DirectionType) -> bool {
-            self.parent_keynav_failed(direction_type)
-        }
-
-        fn map(&self) {
-            self.parent_map()
-        }
-
-        fn measure(&self, orientation: gtk::Orientation, for_size: i32) -> (i32, i32, i32, i32) {
-            self.parent_measure(orientation, for_size)
-        }
-
-        fn mnemonic_activate(&self, group_cycling: bool) -> bool {
-            self.parent_mnemonic_activate(group_cycling)
-        }
-
-        fn move_focus(&self, direction_type: gtk::DirectionType) {
-            self.parent_move_focus(direction_type)
-        }
-
-        fn query_tooltip(
-            &self,
-            x: i32,
-            y: i32,
-            keyboard_tooltip: bool,
-            tooltip: &gtk::Tooltip,
-        ) -> bool {
-            self.parent_query_tooltip(x, y, keyboard_tooltip, tooltip)
-        }
-
-        fn root(&self) {
-            self.parent_root()
-        }
-
-        fn set_focus_child(&self, child: Option<&gtk::Widget>) {
-            self.parent_set_focus_child(child)
-        }
-
-        fn size_allocate(&self, width: i32, height: i32, baseline: i32) {
-            self.parent_size_allocate(width, height, baseline)
-        }
-
-        fn snapshot(&self, snapshot: &gtk::Snapshot) {
-            self.parent_snapshot(snapshot)
-        }
-
-        fn state_flags_changed(&self, state_flags: &gtk::StateFlags) {
-            self.parent_state_flags_changed(state_flags)
-        }
-
-        fn system_setting_changed(&self, settings: &gtk::SystemSetting) {
-            self.parent_system_setting_changed(settings)
-        }
-
-        fn unmap(&self) {
-            self.parent_unmap()
-        }
-
-        fn unroot(&self) {
-            self.parent_unroot()
-        }
+        fn contains(&self, x: f64, y: f64) -> bool { self.parent_contains(x, y) }
+        fn direction_changed(&self, previous_direction: gtk::TextDirection) { self.parent_direction_changed(previous_direction) }
+        fn focus(&self, direction_type: gtk::DirectionType) -> bool { self.parent_focus(direction_type) }
+        fn request_mode(&self) -> gtk::SizeRequestMode { self.parent_request_mode() }
+        fn grab_focus(&self) -> bool { self.parent_grab_focus() }
+        fn keynav_failed(&self, direction_type: gtk::DirectionType) -> bool { self.parent_keynav_failed(direction_type) }
+        fn map(&self) { self.parent_map() }
+        fn measure(&self, orientation: gtk::Orientation, for_size: i32) -> (i32, i32, i32, i32) { self.parent_measure(orientation, for_size) }
+        fn mnemonic_activate(&self, group_cycling: bool) -> bool { self.parent_mnemonic_activate(group_cycling) }
+        fn move_focus(&self, direction_type: gtk::DirectionType) { self.parent_move_focus(direction_type) }
+        fn query_tooltip(&self, x: i32, y: i32, keyboard_tooltip: bool, tooltip: &gtk::Tooltip) -> bool { self.parent_query_tooltip(x, y, keyboard_tooltip, tooltip) }
+        fn root(&self) { self.parent_root() }
+        fn set_focus_child(&self, child: Option<&gtk::Widget>) { self.parent_set_focus_child(child) }
+        fn size_allocate(&self, width: i32, height: i32, baseline: i32) { self.parent_size_allocate(width, height, baseline) }
+        fn snapshot(&self, snapshot: &gtk::Snapshot) { self.parent_snapshot(snapshot) }
+        fn state_flags_changed(&self, state_flags: &gtk::StateFlags) { self.parent_state_flags_changed(state_flags) }
+        fn system_setting_changed(&self, settings: &gtk::SystemSetting) { self.parent_system_setting_changed(settings) }
+        fn unmap(&self) { self.parent_unmap() }
+        fn unroot(&self) { self.parent_unroot() }
     }
 
     impl GLAreaImpl for EguiArea {
         fn render(&self, _context: &gdk::GLContext) -> glib::Propagation {
             let area = self.obj();
 
+            // effective_ppp = display_scale × GNOME text_scale
+            let effective_ppp = self.effective_scale();
+
+            // The physical framebuffer matches the widget's device pixels.
             let screen_size_pixels = self.native_size();
 
-            // Background color from egui style
+            // Tell egui how many physical pixels a virtual point occupies.
+            // This drives both rasterization scale and font size.
+            self.egui_ctx.set_pixels_per_point(effective_ppp);
+
+            // IMPORTANT: the virtual screen that egui lays out in must be
+            // physical size / effective_ppp. Otherwise egui's layout extends
+            // beyond the framebuffer and click coordinates land wrong.
+            let virtual_w = area.width() as f32 / effective_ppp;
+            let virtual_h = area.height() as f32 / effective_ppp;
+
             let bg_color = self.egui_ctx.global_style().visuals.window_fill();
 
             let focused_now = area.has_focus();
             if focused_now != self.focused.get() {
-                // Focus changed; inform IM context once.
                 self.focused.set(focused_now);
                 if let Some(im) = self.im_context.borrow().as_ref() {
-                    if focused_now {
-                        im.focus_in();
-                    } else {
-                        im.focus_out();
-                    }
+                    if focused_now { im.focus_in(); } else { im.focus_out(); }
                 }
             }
 
-            // Clear the GL canvas via painter helper
             let mut painter_guard = self.painter.borrow_mut();
             let painter = painter_guard.as_mut().unwrap();
+
+            // Force GL viewport to the physical framebuffer size so egui's
+            // output doesn't get clipped by GTK's own smaller viewport.
+            unsafe {
+                use egui_glow::glow::HasContext;
+                let gl = painter.gl();
+                gl.viewport(0, 0, screen_size_pixels[0] as i32, screen_size_pixels[1] as i32);
+            }
+
             painter.clear(screen_size_pixels, bg_color.to_normalized_gamma_f32());
 
             if let Some(run_ui) = self.run_ui.borrow().as_ref() {
                 let input_events: Vec<egui::Event> =
                     std::mem::take(self.input_events.borrow_mut().as_mut());
 
-                // Build egui RawInput: minimal, but correct. All coordinates are in
-                // points. We pass the widget size in points via screen_rect.
+                // Pointer events come from GTK in *logical* widget points
+                // (i.e. area.width() scale). egui expects them in *virtual*
+                // points (physical / effective_ppp). Convert.
+                let converted_events: Vec<egui::Event> = input_events
+                    .into_iter()
+                    .map(|ev| match ev {
+                        egui::Event::PointerMoved(p) => {
+                            egui::Event::PointerMoved(p / effective_ppp)
+                        }
+                        egui::Event::PointerButton {
+                            pos, button, pressed, modifiers,
+                        } => egui::Event::PointerButton {
+                            pos: pos / effective_ppp,
+                            button,
+                            pressed,
+                            modifiers,
+                        },
+                        other => other,
+                    })
+                    .collect();
+
                 let input = egui::RawInput {
-                    events: input_events,
+                    events: converted_events,
                     screen_rect: Some(egui::Rect::from_min_size(
                         Default::default(),
-                        egui::Vec2::new(area.width() as f32, area.height() as f32),
+                        egui::Vec2::new(virtual_w, virtual_h),
                     )),
                     viewports: [(
                         egui::ViewportId::ROOT,
                         egui::ViewportInfo {
-                            // Tell egui the underlying native pixel ratio for this surface.
-                            native_pixels_per_point: Some(self.scale_factor()),
+                            native_pixels_per_point: Some(effective_ppp),
                             focused: Some(focused_now),
                             ..Default::default()
                         },
@@ -379,13 +286,10 @@ mod imp {
                     ..egui::RawInput::default()
                 };
 
-                // Run egui UI
                 let mut full_output = self.egui_ctx.run_ui(input, |ui| run_ui(ui));
 
-                // Platform output
                 self.handle_platform_output(full_output.platform_output);
 
-                // Tessellate and draw.
                 let clipped_primitives = self
                     .egui_ctx
                     .tessellate(full_output.shapes, full_output.pixels_per_point);
@@ -402,7 +306,6 @@ mod imp {
     }
 
     impl EguiArea {
-        /// Helper: obtain the scale factor of the native surface.
         fn scale_factor(&self) -> f32 {
             if let Some(native) = self.obj().native() {
                 if let Some(surface) = native.surface() {
@@ -412,7 +315,19 @@ mod imp {
             1.0
         }
 
-        /// Helper: compute native size in device pixels [width, height].
+        /// display_scale × GNOME text_scale.
+        fn effective_scale(&self) -> f32 {
+            let display = self.scale_factor();
+            let text_scale = gtk::Settings::default()
+                .map(|s| {
+                    let dpi = s.property::<i32>("gtk-xft-dpi") as f32 / 1024.0;
+                    if dpi > 0.0 { dpi / 96.0 } else { 1.0 }
+                })
+                .unwrap_or(1.0)
+                .max(1.0);
+            display * text_scale
+        }
+
         fn native_size(&self) -> [u32; 2] {
             let scale_factor = self.scale_factor();
             let width = self.obj().width() as f32;
@@ -423,9 +338,6 @@ mod imp {
             ]
         }
 
-        /// Handle egui's `PlatformOutput` (non-rendering commands).
-        ///
-        /// This includes: clipboard text, open_url, IME placement.
         fn handle_platform_output(&self, output: egui::PlatformOutput) {
             for cmd in output.commands {
                 match cmd {
@@ -443,19 +355,14 @@ mod imp {
                             .obj()
                             .root()
                             .and_then(|r| r.downcast::<gtk::Window>().ok());
+                        let launcher = gtk::UriLauncher::builder().uri(&open.url).build();
                         if let Some(win) = window.as_ref() {
-                            //let _ = gtk::show_uri(Some(win), &open.url, 0);
-                            let launcher = gtk::UriLauncher::builder().uri(&open.url).build();
-
                             launcher.launch(Some(win), None::<&gtk::gio::Cancellable>, |result| {
                                 if let Err(e) = result {
                                     eprintln!("Failed to launch URI: {}", e);
                                 }
                             });
                         } else {
-                            //let _ = gtk::show_uri(None::<&gtk::Window>, &open.url, 0);
-                            let launcher = gtk::UriLauncher::builder().uri(&open.url).build();
-
                             launcher.launch(
                                 None::<&gtk::Window>,
                                 None::<&gtk::gio::Cancellable>,
@@ -473,10 +380,8 @@ mod imp {
                 }
             }
 
-            // IME placement
             if let Some(ime) = output.ime {
                 if let Some(im) = self.im_context.borrow().as_ref() {
-                    // point -> physical pixel
                     let ppp = self.egui_ctx.pixels_per_point();
                     let cursor = ime.cursor_rect;
                     let x = (cursor.min.x * ppp).round() as i32;
@@ -489,17 +394,12 @@ mod imp {
             }
         }
 
-        /// Register GTK event controllers (pointer, scroll, gestures, keyboard) and
-        /// translate them to `egui::Event`s stored in `input_events`.
         fn register_controllers(&self) {
             let obj = self.obj().clone();
 
-            // Hold the modifiers state so all input events include the correct modifier keys.
-            // Rc<Cell<Modifiers>> allows sharing and interior mutability across closures.
             let current_modifiers = self.modifiers.clone();
             current_modifiers.set(egui::Modifiers::default());
 
-            // Click
             let gesture_click = gtk::GestureClick::new();
             gesture_click.set_button(0);
             {
@@ -540,7 +440,6 @@ mod imp {
                 });
             }
 
-            // Move
             let motion = gtk::EventControllerMotion::new();
             {
                 let obj = obj.clone();
@@ -557,7 +456,6 @@ mod imp {
                 });
             }
 
-            // Scroll
             let scroll = gtk::EventControllerScroll::new(
                 gtk::EventControllerScrollFlags::BOTH_AXES
                     | gtk::EventControllerScrollFlags::DISCRETE,
@@ -578,7 +476,6 @@ mod imp {
                 });
             }
 
-            // KeyI
             let key_controller = gtk::EventControllerKey::new();
             {
                 let obj = obj.clone();
@@ -597,14 +494,12 @@ mod imp {
                         return glib::Propagation::Proceed;
                     }
 
-                    // text input
                     if modifiers.is_empty() || modifiers.contains(gdk::ModifierType::SHIFT_MASK) {
                         if let Some(ch) = key.to_unicode() {
                             events.push(egui::Event::Text(ch.into()));
                         }
                     }
 
-                    // egui keys
                     if let Some(ekey) = gdk_to_egui_key(key) {
                         if is_cut_command(emod, ekey) {
                             events.push(egui::Event::Cut);
@@ -665,7 +560,6 @@ mod imp {
         }
     }
 
-    // Utility
     fn gdk_to_egui_key(key: gdk::Key) -> Option<egui::Key> {
         use egui::Key as EKey;
         use gdk::Key as GKey;
