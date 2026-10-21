@@ -1,10 +1,12 @@
 //! XPages — GTK shell + WordCraft document canvas (egui).
 //!
-//! Menus / window chrome: GTK (Relm4 + Adwaita).
-//! Document pages: Session.layout() → wordcraft_render::render_page → egui textures.
+//! - Chrome / sidebar thumbnails: GTK (Relm4 + Adwaita)
+//! - Page view: Session.layout() → wordcraft_render::render_page → egui textures
+//! - Scroll background follows Adwaita light/dark
+//! - Pages are centered; sidebar thumbnails jump the scroll to that page
 //!
-//! EguiArea::set_ui must receive `&mut egui::Ui` (egui 0.37 run_ui). Do not call
-//! Context::root_ui from that callback.
+//! EguiArea::set_ui must receive `&mut egui::Ui` (egui 0.37 `run_ui`).
+//! Do not call `Context::root_ui` from that callback.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -18,14 +20,30 @@ use serde_json::json;
 mod components;
 use components::EguiArea;
 
-/// ~1 CSS pixel per typographic point (WordCraft canvas convention).
 const PX_PER_PT: f32 = 96.0 / 72.0;
 const DEFAULT_ZOOM: f32 = 1.0;
-const PAGE_GAP: f32 = 20.0;
-const MARGIN_X: f32 = 40.0;
+const PAGE_GAP: f32 = 24.0;
+const THUMB_SCALE: f32 = 0.12;
 
 // ---------------------------------------------------------------------------
-// Fonts (optional CJK for empty-state UI labels)
+// Theme
+// ---------------------------------------------------------------------------
+
+fn adwaita_is_dark() -> bool {
+    adw::StyleManager::default().is_dark()
+}
+
+/// Adwaita window_bg-ish color for the egui scroll area (not the page paper).
+fn adwaita_window_bg(is_dark: bool) -> egui::Color32 {
+    if is_dark {
+        egui::Color32::from_rgb(0x24, 0x24, 0x24)
+    } else {
+        egui::Color32::from_rgb(0xfa, 0xfa, 0xfa)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Fonts
 // ---------------------------------------------------------------------------
 
 fn setup_cjk_fonts(ctx: &egui::Context) {
@@ -53,7 +71,7 @@ fn setup_cjk_fonts(ctx: &egui::Context) {
 }
 
 // ---------------------------------------------------------------------------
-// Document open via WordCraft engine
+// Document open
 // ---------------------------------------------------------------------------
 
 fn load_document(path: &Path) -> Result<wordcraft_engine::Session, String> {
@@ -68,10 +86,41 @@ fn load_document(path: &Path) -> Result<wordcraft_engine::Session, String> {
     Ok(session)
 }
 
+// ---------------------------------------------------------------------------
+// Thumbnail → GDK texture (sidebar)
+// ---------------------------------------------------------------------------
 
+fn page_to_texture(
+    session: &mut wordcraft_engine::Session,
+    page_index: usize,
+    scale: f32,
+) -> Option<gtk::gdk::MemoryTexture> {
+    let layout = session.layout();
+    let page = layout.pages.get(page_index)?;
+
+    let img = wordcraft_render::render_page(
+        &session.doc,
+        page,
+        scale,
+        &wordcraft_render::RenderOptions::default(),
+    );
+
+    if img.width == 0 || img.height == 0 {
+        return None;
+    }
+
+    let bytes = gtk::glib::Bytes::from(img.pixels.as_slice());
+    Some(gtk::gdk::MemoryTexture::new(
+        img.width as i32,
+        img.height as i32,
+        gtk::gdk::MemoryFormat::R8g8b8a8Premultiplied,
+        &bytes,
+        (img.width as usize) * 4,
+    ))
+}
 
 // ---------------------------------------------------------------------------
-// Canvas: full-page rasters as egui textures
+// Canvas
 // ---------------------------------------------------------------------------
 
 struct DocCanvas {
@@ -97,14 +146,16 @@ impl DocCanvas {
         ui: &mut egui::Ui,
         session: &mut wordcraft_engine::Session,
         zoom: f32,
+        scroll_to_page: &mut Option<usize>,
     ) {
         let layout = session.layout();
         let scale_px = (zoom * PX_PER_PT).max(0.25);
-
-        // Cache key: page count + zoom bits (replace with session.rev() if public).
         let base_key = (layout.pages.len() as u64) ^ ((scale_px.to_bits() as u64) << 16);
 
+        let target = scroll_to_page.take();
+
         egui::ScrollArea::both()
+            .id_salt("doc_scroll")
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 ui.set_min_width(ui.available_width());
@@ -112,26 +163,32 @@ impl DocCanvas {
                 for (i, page) in layout.pages.iter().enumerate() {
                     let screen_w = page.w * scale_px;
                     let screen_h = page.h * scale_px;
-                    let row_w = (screen_w + MARGIN_X * 2.0).max(ui.available_width());
+                    let row_w = ui.available_width().max(screen_w + 32.0);
                     let row_h = screen_h + PAGE_GAP;
 
                     let (response, painter) =
-                        ui.allocate_painter(egui::vec2(row_w, row_h), egui::Sense::hover());
+                        ui.allocate_painter(egui::vec2(row_w, row_h), egui::Sense::click());
 
-                    let page_rect = egui::Rect::from_min_size(
-                        response.rect.min + egui::vec2(MARGIN_X, 0.0),
+                    if target == Some(i) {
+                        response.scroll_to_me(Some(egui::Align::TOP));
+                    }
+
+                    // Centered page
+                    let page_rect = egui::Rect::from_center_size(
+                        egui::pos2(
+                            response.rect.center().x,
+                            response.rect.min.y + screen_h * 0.5,
+                        ),
                         egui::vec2(screen_w, screen_h),
                     );
 
-                    // Soft shadow
                     painter.rect_filled(
-                        page_rect.translate(egui::vec2(2.0, 2.0)),
+                        page_rect.translate(egui::vec2(3.0, 3.0)),
                         2.0,
-                        egui::Color32::from_black_alpha(28),
+                        egui::Color32::from_black_alpha(40),
                     );
 
                     let key = base_key ^ ((i as u64) << 32);
-
                     let stale = self
                         .textures
                         .get(&i)
@@ -176,6 +233,13 @@ impl DocCanvas {
                             egui::Color32::WHITE,
                         );
                     }
+
+                    painter.rect_stroke(
+                        page_rect,
+                        0.0,
+                        egui::Stroke::new(1.0, egui::Color32::from_black_alpha(50)),
+                        egui::StrokeKind::Outside,
+                    );
                 }
             });
 
@@ -193,6 +257,8 @@ enum AppMsg {
     RequestOpen,
     OpenPath(PathBuf),
     OpenFailed(String),
+    GoToPage(usize),
+    ThemeChanged,
 }
 
 struct AppModel {
@@ -200,9 +266,14 @@ struct AppModel {
     session: Rc<RefCell<wordcraft_engine::Session>>,
     has_document: Rc<RefCell<bool>>,
     canvas: Rc<RefCell<DocCanvas>>,
+    scroll_to_page: Rc<RefCell<Option<usize>>>,
+    is_dark: Rc<RefCell<bool>>,
     open_path: Option<PathBuf>,
     subtitle: String,
     status: String,
+    page_count: usize,
+    /// Stored so `update` can rebuild sidebar without `update_with_view`.
+    thumb_list: Option<gtk::ListBox>,
 }
 
 #[relm4::component]
@@ -215,30 +286,63 @@ impl SimpleComponent for AppModel {
         #[name = "window"]
         adw::ApplicationWindow {
             set_title: Some("XPages"),
-            set_default_size: (960, 700),
+            set_default_size: (1100, 720),
 
             #[wrap(Some)]
-            set_content = &adw::ToolbarView {
-                add_top_bar = &adw::HeaderBar {
-                    pack_start = &gtk::Button {
-                        set_label: "Open",
-                        set_tooltip_text: Some("Open a document"),
-                        connect_clicked => AppMsg::RequestOpen,
+            set_content = &adw::OverlaySplitView {
+                set_sidebar_position: gtk::PackType::Start,
+                set_show_sidebar: true,
+                set_min_sidebar_width: 140.0,
+                set_max_sidebar_width: 220.0,
+
+                #[wrap(Some)]
+                set_sidebar = &adw::ToolbarView {
+                    add_top_bar = &adw::HeaderBar {
+                        #[wrap(Some)]
+                        set_title_widget = &gtk::Label {
+                            set_label: "Pages",
+                            add_css_class: "title",
+                        },
                     },
+
                     #[wrap(Some)]
-                    set_title_widget = &adw::WindowTitle {
-                        set_title: "XPages",
-                        #[watch]
-                        set_subtitle: &model.subtitle,
+                    #[name = "thumb_scroll"]
+                    set_content = &gtk::ScrolledWindow {
+                        set_vexpand: true,
+                        set_policy: (gtk::PolicyType::Never, gtk::PolicyType::Automatic),
+
+                        #[wrap(Some)]
+                        #[name = "thumb_list"]
+                        set_child = &gtk::ListBox {
+                            set_selection_mode: gtk::SelectionMode::Single,
+                            add_css_class: "navigation-sidebar",
+                        },
                     },
                 },
 
                 #[wrap(Some)]
-                #[name = "content_box"]
-                set_content = &gtk::Box {
-                    set_orientation: gtk::Orientation::Vertical,
-                    set_vexpand: true,
-                    set_hexpand: true,
+                set_content = &adw::ToolbarView {
+                    add_top_bar = &adw::HeaderBar {
+                        pack_start = &gtk::Button {
+                            set_label: "Open",
+                            set_tooltip_text: Some("Open a document"),
+                            connect_clicked => AppMsg::RequestOpen,
+                        },
+                        #[wrap(Some)]
+                        set_title_widget = &adw::WindowTitle {
+                            set_title: "XPages",
+                            #[watch]
+                            set_subtitle: &model.subtitle,
+                        },
+                    },
+
+                    #[wrap(Some)]
+                    #[name = "content_box"]
+                    set_content = &gtk::Box {
+                        set_orientation: gtk::Orientation::Vertical,
+                        set_vexpand: true,
+                        set_hexpand: true,
+                    },
                 },
             },
         }
@@ -249,51 +353,84 @@ impl SimpleComponent for AppModel {
         _root: Self::Root,
         sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
-        // 1) Model first so view_output! can see `model`
         let session = Rc::new(RefCell::new(wordcraft_engine::Session::new(
             wordcraft_doc::Document::new(),
         )));
         let has_document = Rc::new(RefCell::new(false));
         let canvas = Rc::new(RefCell::new(DocCanvas::default()));
+        let scroll_to_page = Rc::new(RefCell::new(None));
+        let is_dark = Rc::new(RefCell::new(adwaita_is_dark()));
 
         let mut model = AppModel {
             egui_area: None,
             session: Rc::clone(&session),
             has_document: Rc::clone(&has_document),
             canvas: Rc::clone(&canvas),
+            scroll_to_page: Rc::clone(&scroll_to_page),
+            is_dark: Rc::clone(&is_dark),
             open_path: None,
             subtitle: "No document".into(),
             status: String::new(),
+            page_count: 0,
+            thumb_list: None,
         };
 
-        // 2) Widgets
         let widgets = view_output!();
 
-        // 3) Egui area after model + widgets, then append
+        // Sidebar click → jump to page (connect once)
+        {
+            let sender = sender.clone();
+            widgets.thumb_list.connect_row_activated(move |_, row| {
+                let index = row.index();
+                if index >= 0 {
+                    sender.input(AppMsg::GoToPage(index as usize));
+                }
+            });
+        }
+        model.thumb_list = Some(widgets.thumb_list.clone());
+
+        // Adwaita theme changes
+        {
+            let is_dark = Rc::clone(&is_dark);
+            let sender = sender.clone();
+            adw::StyleManager::default().connect_dark_notify(move |sm| {
+                *is_dark.borrow_mut() = sm.is_dark();
+                sender.input(AppMsg::ThemeChanged);
+            });
+        }
+
         let session_for_ui = Rc::clone(&session);
         let has_document_for_ui = Rc::clone(&has_document);
         let canvas_for_ui = Rc::clone(&canvas);
+        let scroll_for_ui = Rc::clone(&scroll_to_page);
+        let is_dark_for_ui = Rc::clone(&is_dark);
         let sender_for_ui = sender.clone();
 
         let egui_area = EguiArea::default();
         egui_area.set_vexpand(true);
         egui_area.set_hexpand(true);
 
-        // EguiArea must call this from inside ctx.run_ui(|ui| …).
-        // Callback signature: FnMut(&mut egui::Ui)  — NOT &Context.
         egui_area.set_ui(move |ui: &mut egui::Ui| {
             static FONTS: Once = Once::new();
             FONTS.call_once(|| setup_cjk_fonts(ui.ctx()));
 
-            // Already the root Ui — do not call ctx.root_ui().
+            let dark = *is_dark_for_ui.borrow();
+            let bg = adwaita_window_bg(dark);
+
+            ui.ctx().set_visuals(if dark {
+                egui::Visuals::dark()
+            } else {
+                egui::Visuals::light()
+            });
+
             egui::CentralPanel::default()
-                .frame(egui::Frame::NONE.fill(egui::Color32::from_gray(220)))
+                .frame(egui::Frame::NONE.fill(bg))
                 .show(ui, |ui| {
                     if !*has_document_for_ui.borrow() {
                         ui.vertical_centered(|ui| {
                             ui.add_space(ui.available_height() * 0.35);
                             ui.heading("No document open");
-                            ui.label("Open a file to render it on the canvas.");
+                            ui.label("Open a file to view pages. Use the sidebar to jump.");
                             ui.add_space(12.0);
                             if ui.button("Open document…").clicked() {
                                 sender_for_ui.input(AppMsg::RequestOpen);
@@ -304,7 +441,8 @@ impl SimpleComponent for AppModel {
 
                     let mut session = session_for_ui.borrow_mut();
                     let mut canvas = canvas_for_ui.borrow_mut();
-                    canvas.show(ui, &mut session, DEFAULT_ZOOM);
+                    let mut target = scroll_for_ui.borrow_mut();
+                    canvas.show(ui, &mut session, DEFAULT_ZOOM, &mut target);
                 });
         });
 
@@ -342,7 +480,6 @@ impl SimpleComponent for AppModel {
                 all.set_name(Some("All files"));
                 all.add_pattern("*");
                 filters.append(&all);
-
                 dialog.set_filters(Some(&filters));
 
                 let sender = sender.clone();
@@ -369,9 +506,12 @@ impl SimpleComponent for AppModel {
             }
 
             AppMsg::OpenPath(path) => match load_document(&path) {
-                Ok(new_session) => {
+                Ok(mut new_session) => {
+                    let page_count = new_session.layout().pages.len();
+
                     *self.session.borrow_mut() = new_session;
                     self.canvas.borrow_mut().clear();
+                    *self.scroll_to_page.borrow_mut() = Some(0);
                     self.subtitle = path
                         .file_name()
                         .map(|n| n.to_string_lossy().into_owned())
@@ -379,6 +519,12 @@ impl SimpleComponent for AppModel {
                     self.open_path = Some(path);
                     *self.has_document.borrow_mut() = true;
                     self.status.clear();
+                    self.page_count = page_count;
+
+                    if let Some(list) = self.thumb_list.as_ref() {
+                        rebuild_thumb_list(list, &self.session, page_count);
+                    }
+
                     if let Some(area) = self.egui_area.as_ref() {
                         area.queue_draw();
                     }
@@ -392,11 +538,70 @@ impl SimpleComponent for AppModel {
             AppMsg::OpenFailed(err) => {
                 self.status = err;
             }
+
+            AppMsg::GoToPage(index) => {
+                *self.scroll_to_page.borrow_mut() = Some(index);
+                if let Some(area) = self.egui_area.as_ref() {
+                    area.queue_draw();
+                }
+            }
+
+            AppMsg::ThemeChanged => {
+                if let Some(area) = self.egui_area.as_ref() {
+                    area.queue_draw();
+                }
+            }
         }
     }
 }
 
+/// Fill the sidebar with page thumbnails. Row activation is connected once in init.
+fn rebuild_thumb_list(
+    list: &gtk::ListBox,
+    session: &Rc<RefCell<wordcraft_engine::Session>>,
+    page_count: usize,
+) {
+    while let Some(row) = list.row_at_index(0) {
+        list.remove(&row);
+    }
+
+    for i in 0..page_count {
+        let row = gtk::ListBoxRow::new();
+        row.set_activatable(true);
+
+        let vbox = gtk::Box::new(gtk::Orientation::Vertical, 4);
+        vbox.set_margin_top(8);
+        vbox.set_margin_bottom(8);
+        vbox.set_margin_start(8);
+        vbox.set_margin_end(8);
+        vbox.set_halign(gtk::Align::Center);
+
+        let picture = gtk::Picture::new();
+        picture.set_content_fit(gtk::ContentFit::Contain);
+        picture.set_can_shrink(true);
+        picture.set_size_request(100, 130);
+
+        {
+            let mut session = session.borrow_mut();
+            if let Some(tex) = page_to_texture(&mut session, i, THUMB_SCALE) {
+                picture.set_paintable(Some(&tex));
+            }
+        }
+
+        let label = gtk::Label::new(Some(&format!("Page {}", i + 1)));
+        label.add_css_class("caption");
+
+        vbox.append(&picture);
+        vbox.append(&label);
+        row.set_child(Some(&vbox));
+        list.append(&row);
+    }
+}
+
 fn main() {
+    adw::init().expect("adw::init failed");
+
     let app = RelmApp::new("com.example.XPages");
+    adw::StyleManager::default().set_color_scheme(adw::ColorScheme::Default);
     app.run::<AppModel>(());
 }
