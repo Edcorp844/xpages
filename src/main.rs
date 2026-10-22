@@ -273,231 +273,228 @@ impl DocCanvas {
         }
     }
 
-    fn show(
-        &mut self,
-        ui: &mut egui::Ui,
-        session: &mut wordcraft_engine::Session,
-        zoom: f32,
-        scroll_to_page: &mut Option<usize>,
-        focus_id: egui::Id,
-    ) {
-        let ppp = ui.ctx().pixels_per_point();
+   fn show(
+    &mut self,
+    ui: &mut egui::Ui,
+    session: &mut wordcraft_engine::Session,
+    zoom: f32,
+    scroll_to_page: &mut Option<usize>,
+    focus_id: egui::Id,
+) {
+    let ppp = ui.ctx().pixels_per_point();
 
-        // When the effective scale changes (Large Text toggled, monitor moved),
-        // reset scroll so the top of the current page stays visible.
-        if (self.last_ppp - ppp).abs() > 0.001 {
-            self.last_ppp = ppp;
-            if scroll_to_page.is_none() {
-                *scroll_to_page = Some(session.page_hint);
-            }
+    if (self.last_ppp - ppp).abs() > 0.001 {
+        self.last_ppp = ppp;
+        if scroll_to_page.is_none() {
+            *scroll_to_page = Some(session.page_hint);
         }
+    }
 
-        let rev = session.rev();
-        let layout = session.layout();
+    let rev = session.rev();
+    let layout = session.layout();
+    let logical_scale = zoom * PX_PER_PT; // Used for click mapping
+    let target = scroll_to_page.take();
 
-        // Logical scale: how many egui points one document point occupies.
-        // This is the coordinate system used for click mapping below.
-        let logical_scale = zoom * PX_PER_PT;
+    self.caret_blink_tick();
+    if self.editing {
+        ui.ctx().request_repaint_after(Duration::from_millis(500));
+        ui.memory_mut(|m| m.request_focus(focus_id));
+    }
 
-        // Render scale: how many physical pixels one document point occupies.
-        // Used to generate textures at native physical resolution (sharp text).
-        let render_scale = (logical_scale * ppp).max(0.25);
+    let caret_hint = session.page_hint;
+    let caret = layout.caret_on(&session.sel.focus, caret_hint);
+    let caret_page = caret.as_ref().map(|c| c.page);
 
-        let base_key = texture_key(layout.pages.len(), render_scale, rev, ppp);
-        let target = scroll_to_page.take();
+    let (sel_a, sel_b) = session.sel.ordered();
+    let selection_rects = if session.sel.is_collapsed() {
+        Vec::new()
+    } else {
+        layout.selection_rects(&session.doc, &sel_a, &sel_b, caret_hint)
+    };
 
-        self.caret_blink_tick();
-        if self.editing {
-            ui.ctx().request_repaint_after(Duration::from_millis(500));
-            ui.memory_mut(|m| m.request_focus(focus_id));
-        }
+    egui::ScrollArea::both()
+        .id_salt("doc_scroll")
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
 
-        let caret_hint = session.page_hint;
-        let caret = layout.caret_on(&session.sel.focus, caret_hint);
-        let caret_page = caret.as_ref().map(|c| c.page);
+            for (i, page) in layout.pages.iter().enumerate() {
+                // --- PIXEL PERFECT LAYOUT -------------------------------------
+                // 1. Calculate the exact physical pixel size the page should take up.
+                let phys_w = (page.w * logical_scale * ppp).ceil();
+                let phys_h = (page.h * logical_scale * ppp).ceil();
 
-        let (sel_a, sel_b) = session.sel.ordered();
-        let selection_rects = if session.sel.is_collapsed() {
-            Vec::new()
-        } else {
-            layout.selection_rects(&session.doc, &sel_a, &sel_b, caret_hint)
-        };
+                // 2. The logical size in egui points must exactly match those physical pixels.
+                let screen_w = phys_w / ppp;
+                let screen_h = phys_h / ppp;
 
-        egui::ScrollArea::both()
-            .id_salt("doc_scroll")
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                ui.set_min_width(ui.available_width());
+                // 3. The render scale must generate exactly phys_w texture pixels.
+                let page_render_scale = phys_w / page.w;
 
-                for (i, page) in layout.pages.iter().enumerate() {
-                    // On-screen size of the page in egui points. This is what
-                    // the click mapping uses, so it must be exactly
-                    // page.w * logical_scale.
-                    let screen_w = page.w * logical_scale;
-                    let screen_h = page.h * logical_scale;
+                let row_h = screen_h + PAGE_GAP;
+                let row_w = ui.available_width().max(screen_w + 64.0);
 
-                    let row_h = screen_h + PAGE_GAP;
-                    let row_w = ui.available_width().max(screen_w + 64.0);
+                let (response, painter) = ui.allocate_painter(
+                    egui::vec2(row_w, row_h),
+                    egui::Sense::click_and_drag(),
+                );
 
-                    let (response, painter) = ui.allocate_painter(
-                        egui::vec2(row_w, row_h),
-                        egui::Sense::click_and_drag(),
-                    );
+                if target == Some(i) {
+                    response.scroll_to_me(Some(egui::Align::TOP));
+                }
 
-                    if target == Some(i) {
-                        response.scroll_to_me(Some(egui::Align::TOP));
-                    }
+                // 4. Snap the page's top-left corner to the nearest *physical* pixel.
+                let center_x = response.rect.center().x;
+                let top_y = response.rect.min.y;
 
-                    // Centre the page in the row, exactly as before. No
-                    // snapping, no pixel-alignment offset.
-                    let page_rect = egui::Rect::from_center_size(
-                        egui::pos2(
-                            response.rect.center().x,
-                            response.rect.min.y + screen_h * 0.5,
-                        ),
-                        egui::vec2(screen_w, screen_h),
-                    );
+                let snap_x = ((center_x - screen_w * 0.5) * ppp).round() / ppp;
+                let snap_y = (top_y * ppp).round() / ppp;
 
-                    // --- cursor icon ----------------------------------------
-                    let pointer_over_page = ui
-                        .ctx()
-                        .pointer_hover_pos()
-                        .map_or(false, |p| page_rect.contains(p));
-                    if pointer_over_page {
-                        ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
-                    }
+                let page_rect = egui::Rect::from_min_size(
+                    egui::pos2(snap_x, snap_y),
+                    egui::vec2(screen_w, screen_h),
+                );
+                // -------------------------------------------------------------
 
-                    // --- click → caret --------------------------------------
-                    if response.clicked() || response.drag_started() {
-                        if let Some(pos) = response.interact_pointer_pos() {
-                            if page_rect.contains(pos) {
-                                self.editing = true;
-                                ui.memory_mut(|m| m.request_focus(focus_id));
+                // --- cursor icon --------------------------------------------
+                let pointer_over_page = ui
+                    .ctx()
+                    .pointer_hover_pos()
+                    .map_or(false, |p| page_rect.contains(p));
+                if pointer_over_page {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
+                }
 
-                                // Map screen position to document points using
-                                // the same logical_scale as the page rect. This
-                                // is the coordinate contract that must not
-                                // change; it's what makes the caret land where
-                                // you click.
-                                let local = (pos - page_rect.min) / logical_scale;
+                // --- click → caret ------------------------------------------
+                if response.clicked() || response.drag_started() {
+                    if let Some(pos) = response.interact_pointer_pos() {
+                        if page_rect.contains(pos) {
+                            self.editing = true;
+                            ui.memory_mut(|m| m.request_focus(focus_id));
 
-                                let story: wordcraft_doc::StoryRef = layout
-                                    .story_at(i, local.x, local.y)
-                                    .unwrap_or(wordcraft_doc::StoryRef::Body);
+                            // Use logical_scale, not the physical page_render_scale
+                            let local = (pos - page_rect.min) / logical_scale;
+                            
+                            let story: wordcraft_doc::StoryRef = layout
+                                .story_at(i, local.x, local.y)
+                                .unwrap_or(wordcraft_doc::StoryRef::Body);
 
-                                if let Some(hit) = layout.hit(i, local.x, local.y, story) {
-                                    let extend = ui.input(|m| m.modifiers.shift);
-                                    let _ = session.run(
-                                        "caret.set",
-                                        &json!({ "pos": hit, "extend": extend }),
-                                    );
-                                    session.page_hint = i;
-                                    session.close_typing();
-                                    self.caret_blink_reset();
-                                    ui.ctx().request_repaint();
-                                }
-                            }
-                        }
-                    }
-
-                    // --- page shadow + texture ------------------------------
-                    painter.rect_filled(
-                        page_rect.translate(egui::vec2(3.0, 3.0)),
-                        2.0,
-                        egui::Color32::from_black_alpha(40),
-                    );
-
-                    let key = base_key ^ ((i as u64) << 32);
-                    let stale = self
-                        .textures
-                        .get(&i)
-                        .map(|(k, _)| *k != key)
-                        .unwrap_or(true);
-
-                    if stale {
-                        let img = wordcraft_render::render_page(
-                            &session.doc,
-                            page,
-                            render_scale,
-                            &wordcraft_render::RenderOptions::default(),
-                        );
-                        let color = egui::ColorImage::from_rgba_premultiplied(
-                            [img.width as usize, img.height as usize],
-                            &img.pixels,
-                        );
-                        match self.textures.get_mut(&i) {
-                            Some((k, tex)) => {
-                                tex.set(color, egui::TextureOptions::LINEAR);
-                                *k = key;
-                            }
-                            None => {
-                                let tex = ui.ctx().load_texture(
-                                    format!("page{i}"),
-                                    color,
-                                    egui::TextureOptions::LINEAR,
+                            if let Some(hit) = layout.hit(i, local.x, local.y, story) {
+                                let extend = ui.input(|m| m.modifiers.shift);
+                                let _ = session.run(
+                                    "caret.set",
+                                    &json!({ "pos": hit, "extend": extend }),
                                 );
-                                self.textures.insert(i, (key, tex));
+                                session.page_hint = i;
+                                session.close_typing();
+                                self.caret_blink_reset();
+                                ui.ctx().request_repaint();
                             }
                         }
                     }
+                }
 
-                    if let Some((_, tex)) = self.textures.get(&i) {
-                        painter.image(
-                            tex.id(),
-                            page_rect,
-                            egui::Rect::from_min_max(
-                                egui::pos2(0.0, 0.0),
-                                egui::pos2(1.0, 1.0),
-                            ),
-                            egui::Color32::WHITE,
-                        );
-                    }
+                // --- page shadow + texture ------------------------------
+                painter.rect_filled(
+                    page_rect.translate(egui::vec2(3.0, 3.0)),
+                    2.0,
+                    egui::Color32::from_black_alpha(40),
+                );
 
-                    // --- selection ------------------------------------------
-                    let sel_fill =
-                        egui::Color32::from_rgba_unmultiplied(0x30, 0x60, 0xd0, 80);
-                    for (rpage, r) in &selection_rects {
-                        if *rpage != i {
-                            continue;
+                // Cache key uses page_render_scale
+                let key = texture_key(layout.pages.len(), page_render_scale, rev, ppp)
+                    ^ ((i as u64) << 32);
+                let stale = self
+                    .textures
+                    .get(&i)
+                    .map(|(k, _)| *k != key)
+                    .unwrap_or(true);
+
+                if stale {
+                    // Generate the texture at the exact physical size
+                    let img = wordcraft_render::render_page(
+                        &session.doc,
+                        page,
+                        page_render_scale,
+                        &wordcraft_render::RenderOptions::default(),
+                    );
+                    let color = egui::ColorImage::from_rgba_premultiplied(
+                        [img.width as usize, img.height as usize],
+                        &img.pixels,
+                    );
+                    match self.textures.get_mut(&i) {
+                        Some((k, tex)) => {
+                            tex.set(color, egui::TextureOptions::LINEAR);
+                            *k = key;
                         }
-                        let rr = egui::Rect::from_min_size(
-                            page_rect.min
-                                + egui::vec2(r.x * logical_scale, r.y * logical_scale),
-                            egui::vec2(r.w * logical_scale, r.h * logical_scale),
-                        );
-                        painter.rect_filled(rr, 0.0, sel_fill);
+                        None => {
+                            let tex = ui.ctx().load_texture(
+                                format!("page{i}"),
+                                color,
+                                egui::TextureOptions::LINEAR,
+                            );
+                            self.textures.insert(i, (key, tex));
+                        }
                     }
+                }
 
-                    // --- caret ----------------------------------------------
-                    if self.editing
-                        && self.caret_visible
-                        && caret_page == Some(i)
-                        && let Some(c) = caret.as_ref()
-                    {
-                        let r = egui::Rect::from_min_size(
-                            page_rect.min
-                                + egui::vec2(c.x * logical_scale, c.top * logical_scale),
-                            egui::vec2(c.width.max(1.5), c.height * logical_scale),
-                        );
-                        painter.rect_filled(
-                            r,
-                            0.0,
-                            egui::Color32::from_rgb(0x30, 0x60, 0xd0),
-                        );
-                    }
-
-                    painter.rect_stroke(
+                if let Some((_, tex)) = self.textures.get(&i) {
+                    painter.image(
+                        tex.id(),
                         page_rect,
-                        0.0,
-                        egui::Stroke::new(1.0, egui::Color32::from_black_alpha(50)),
-                        egui::StrokeKind::Outside,
+                        egui::Rect::from_min_max(
+                            egui::pos2(0.0, 0.0),
+                            egui::pos2(1.0, 1.0),
+                        ),
+                        egui::Color32::WHITE,
                     );
                 }
-            });
 
-        let n = layout.pages.len();
-        self.textures.retain(|i, _| *i < n);
-    }
+                // --- selection ------------------------------------------
+                let sel_fill =
+                    egui::Color32::from_rgba_unmultiplied(0x30, 0x60, 0xd0, 80);
+                for (rpage, r) in &selection_rects {
+                    if *rpage != i {
+                        continue;
+                    }
+                    let rr = egui::Rect::from_min_size(
+                        page_rect.min
+                            + egui::vec2(r.x * logical_scale, r.y * logical_scale),
+                        egui::vec2(r.w * logical_scale, r.h * logical_scale),
+                    );
+                    painter.rect_filled(rr, 0.0, sel_fill);
+                }
+
+                // --- caret ----------------------------------------------
+                if self.editing
+                    && self.caret_visible
+                    && caret_page == Some(i)
+                    && let Some(c) = caret.as_ref()
+                {
+                    let r = egui::Rect::from_min_size(
+                        page_rect.min
+                            + egui::vec2(c.x * logical_scale, c.top * logical_scale),
+                        egui::vec2(c.width.max(1.5), c.height * logical_scale),
+                    );
+                    painter.rect_filled(
+                        r,
+                        0.0,
+                        egui::Color32::from_rgb(0x30, 0x60, 0xd0),
+                    );
+                }
+
+                painter.rect_stroke(
+                    page_rect,
+                    0.0,
+                    egui::Stroke::new(1.0, egui::Color32::from_black_alpha(50)),
+                    egui::StrokeKind::Outside,
+                );
+            }
+        });
+
+    let n = layout.pages.len();
+    self.textures.retain(|i, _| *i < n);
+}
 }
 
 // ---------------------------------------------------------------------------
