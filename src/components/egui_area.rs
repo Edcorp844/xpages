@@ -374,15 +374,37 @@ mod imp {
 
         /// display_scale × GNOME text_scale.
         fn effective_scale(&self) -> f32 {
-            let display = self.scale_factor();
-            let text_scale = gtk::Settings::default()
-                .map(|s| {
-                    let dpi = s.property::<i32>("gtk-xft-dpi") as f32 / 1024.0;
-                    if dpi > 0.0 { dpi / 96.0 } else { 1.0 }
-                })
-                .unwrap_or(1.0)
-                .max(1.0);
-            display * text_scale
+            let display = self.scale_factor().max(1.0);
+
+            #[cfg(target_os = "macos")]
+            {
+                // On macOS just trust the surface scale factor.
+                // gtk-xft-dpi is unreliable / often 0.
+                display
+            }
+
+            #[cfg(target_os = "windows")]
+            {
+                // Windows: trust the surface scale factor.
+                // Text scaling is better handled by the system / GTK settings.
+                display
+            }
+
+            #[cfg(target_os = "linux")]
+            {
+                // On Linux keep the GNOME text-scale behaviour
+                let text_scale = gtk::Settings::default()
+                    .map(|s| {
+                        let dpi = s.property::<i32>("gtk-xft-dpi") as f32 / 1024.0;
+                        if dpi > 0.0 {
+                            (dpi / 96.0).max(1.0)
+                        } else {
+                            1.0
+                        }
+                    })
+                    .unwrap_or(1.0);
+                (display * text_scale).max(1.0)
+            }
         }
 
         fn native_size(&self) -> [u32; 2] {
