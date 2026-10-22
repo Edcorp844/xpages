@@ -1,3 +1,5 @@
+// document_canvas.rs  (show implementation – unchanged logic, works with the fixed ppp)
+
 use super::caret::{draw_caret, draw_selection};
 use crate::state::DocumentCanvas;
 use serde_json::json;
@@ -55,10 +57,7 @@ impl DocumentCanvas {
         let mut hovering_page = false;
 
         // Temporarily hide scroll bars to remove the default side lines
-        let mut style = ui.style().as_ref().clone();
-        style.visuals.widgets.noninteractive.bg_stroke = egui::Stroke::NONE;
-        let old_style = ui.style_mut();
-        *old_style = style;
+        ui.style_mut().visuals.widgets.noninteractive.bg_stroke = egui::Stroke::NONE;
 
         let mask_height = RULER_SIZE + RULER_GAP + RULER_SAFETY_GAP;
         let (_ruler_area, scroll_area) =
@@ -115,7 +114,6 @@ impl DocumentCanvas {
                     }
 
                     // --- HANDLE MOUSE EVENTS ---
-                    
                     // 1. Click to place cursor
                     if response.clicked() {
                         if let Some(pos) = response.interact_pointer_pos() {
@@ -152,7 +150,6 @@ impl DocumentCanvas {
                                     .unwrap_or(wordcraft_doc::StoryRef::Body);
 
                                 if let Some(hit) = layout.hit(i, local.x, local.y, story) {
-                                    // Force extend = true so the original selection anchor is kept
                                     let _ = session
                                         .run("caret.set", &json!({ "pos": hit, "extend": true }));
                                     session.page_hint = i;

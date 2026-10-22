@@ -32,11 +32,9 @@ impl EguiArea {
     }
 
     pub fn set_max_fps(&self, max_fps: u32) {
-        self.imp()
-            .min_render_interval
-            .set(Some(Duration::from_micros(
-                ((1000.0 / max_fps as f64) * 1000.0) as u64,
-            )));
+        self.imp().min_render_interval.set(Some(Duration::from_micros(
+            ((1000.0 / max_fps as f64) * 1000.0) as u64,
+        )));
     }
 
     pub fn set_ui(&self, ui: impl Fn(&mut egui::Ui) + 'static) {
@@ -253,38 +251,44 @@ mod imp {
             // ---------------------------------------------------------------
             // Coordinate system (Linux / macOS / Windows)
             //
-            // • GTK always reports width/height and pointer events in
-            //   *logical points*.
-            // • The real OpenGL drawable is in *physical pixels*
-            //   = logical × surface.scale_factor().
-            // • We tell egui:
-            //     screen_rect  = logical size
-            //     pixels_per_point = effective_scale()
-            // • Pointer events are left untouched (already logical).
+            // GTK reports width/height and pointer events in *logical points*.
+            // The real OpenGL drawable is *physical pixels* =
+            //   logical × surface.scale_factor()   (display scale only)
+            //
+            // Accessibility text scale (GNOME Large Text) is handled by:
+            //   • shrinking the virtual screen  (logical / text)
+            //   • raising pixels_per_point      (display × text)
+            //   • converting pointer events     (pos / text)
+            // so fonts stay sharp and the UI grows with the rest of the desktop.
+            //
+            // On macOS / Windows text_scale is always 1.0.
             // ---------------------------------------------------------------
 
-            let display_scale = self.scale_factor().max(1.0);
-            let ppp = self.effective_scale(); // may include text-scale on Linux
+            let display = self.scale_factor().max(1.0);
+            let text = self.text_scale();
+            let ppp = (display * text).max(1.0);
 
             let logical_w = area.width() as f32;
             let logical_h = area.height() as f32;
 
-            // Guard against zero-size allocations during resize
             if logical_w <= 0.0 || logical_h <= 0.0 {
                 return glib::Propagation::Stop;
             }
 
-            // Physical framebuffer size (what the GL context actually has)
+            // Real framebuffer size – never includes text scale
             let physical = [
-                (logical_w * display_scale).round().max(1.0) as u32,
-                (logical_h * display_scale).round().max(1.0) as u32,
+                (logical_w * display).round().max(1.0) as u32,
+                (logical_h * display).round().max(1.0) as u32,
             ];
+
+            // Virtual size shrinks when text > 1 → UI elements become larger
+            let virtual_w = logical_w / text;
+            let virtual_h = logical_h / text;
 
             self.egui_ctx.set_pixels_per_point(ppp);
 
             let bg_color = self.egui_ctx.global_style().visuals.window_fill();
 
-            // Focus / IME
             let focused_now = area.has_focus();
             if focused_now != self.focused.get() {
                 self.focused.set(focused_now);
@@ -302,7 +306,6 @@ mod imp {
                 return glib::Propagation::Stop;
             };
 
-            // Make sure the GL viewport covers the whole physical drawable
             unsafe {
                 use egui_glow::glow::HasContext;
                 let gl = painter.gl();
@@ -315,11 +318,34 @@ mod imp {
                 let input_events: Vec<egui::Event> =
                     std::mem::take(self.input_events.borrow_mut().as_mut());
 
+                // Convert pointer events by the text-scale factor only.
+                // (On macOS/Windows text == 1.0 → no change.)
+                let converted_events: Vec<egui::Event> = input_events
+                    .into_iter()
+                    .map(|ev| match ev {
+                        egui::Event::PointerMoved(p) => {
+                            egui::Event::PointerMoved(p / text)
+                        }
+                        egui::Event::PointerButton {
+                            pos,
+                            button,
+                            pressed,
+                            modifiers,
+                        } => egui::Event::PointerButton {
+                            pos: pos / text,
+                            button,
+                            pressed,
+                            modifiers,
+                        },
+                        other => other,
+                    })
+                    .collect();
+
                 let input = egui::RawInput {
-                    events: input_events,
+                    events: converted_events,
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
-                        egui::vec2(logical_w, logical_h),
+                        egui::vec2(virtual_w, virtual_h),
                     )),
                     viewports: [(
                         egui::ViewportId::ROOT,
@@ -369,36 +395,25 @@ mod imp {
             1.0
         }
 
-        /// Platform-aware pixels-per-point.
-        ///
-        /// - macOS / Windows → surface scale only
-        /// - Linux (GNOME)  → surface scale × text scale (gtk-xft-dpi)
-        fn effective_scale(&self) -> f32 {
-            let display = self.scale_factor().max(1.0);
-
-            #[cfg(target_os = "macos")]
-            {
-                display
-            }
-
-            #[cfg(target_os = "windows")]
-            {
-                display
-            }
-
+        /// Accessibility / GNOME text scale.
+        /// Always 1.0 on macOS and Windows.
+        fn text_scale(&self) -> f32 {
             #[cfg(all(unix, not(target_os = "macos")))]
             {
-                let text_scale = gtk::Settings::default()
+                gtk::Settings::default()
                     .map(|s| {
                         let dpi = s.property::<i32>("gtk-xft-dpi") as f32 / 1024.0;
                         if dpi > 0.0 {
-                            (dpi / 96.0).max(1.0)
+                            (dpi / 96.0).clamp(0.5, 4.0)
                         } else {
                             1.0
                         }
                     })
-                    .unwrap_or(1.0);
-                (display * text_scale).max(1.0)
+                    .unwrap_or(1.0)
+            }
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
+            {
+                1.0
             }
         }
 
@@ -421,11 +436,15 @@ mod imp {
                             .and_then(|r| r.downcast::<gtk::Window>().ok());
                         let launcher = gtk::UriLauncher::builder().uri(&open.url).build();
                         if let Some(win) = window.as_ref() {
-                            launcher.launch(Some(win), None::<&gtk::gio::Cancellable>, |result| {
-                                if let Err(e) = result {
-                                    eprintln!("Failed to launch URI: {}", e);
-                                }
-                            });
+                            launcher.launch(
+                                Some(win),
+                                None::<&gtk::gio::Cancellable>,
+                                |result| {
+                                    if let Err(e) = result {
+                                        eprintln!("Failed to launch URI: {}", e);
+                                    }
+                                },
+                            );
                         } else {
                             launcher.launch(
                                 None::<&gtk::Window>,
@@ -466,7 +485,7 @@ mod imp {
 
             // ---- Pointer click -------------------------------------------------
             let gesture_click = gtk::GestureClick::new();
-            gesture_click.set_button(0); // any button
+            gesture_click.set_button(0);
             {
                 let obj = obj.clone();
                 let current_modifiers = current_modifiers.clone();
@@ -776,7 +795,8 @@ mod imp {
                 unsafe { libloading::os::unix::Library::new("libepoxy.0.dylib").unwrap() };
 
             #[cfg(all(unix, not(target_os = "macos")))]
-            let library = unsafe { libloading::os::unix::Library::new("libepoxy.so.0").unwrap() };
+            let library =
+                unsafe { libloading::os::unix::Library::new("libepoxy.so.0").unwrap() };
 
             #[cfg(windows)]
             let library = libloading::os::windows::Library::open_already_loaded("libepoxy-0.dll")
