@@ -424,14 +424,14 @@ impl DocCanvas {
                     );
                     match self.textures.get_mut(&i) {
                         Some((k, tex)) => {
-                            tex.set(color, egui::TextureOptions::LINEAR);
+                            tex.set(color, egui::TextureOptions::NEAREST);
                             *k = key;
                         }
                         None => {
                             let tex = ui.ctx().load_texture(
                                 format!("page{i}"),
                                 color,
-                                egui::TextureOptions::LINEAR,
+                                egui::TextureOptions::NEAREST,
                             );
                             self.textures.insert(i, (key, tex));
                         }
