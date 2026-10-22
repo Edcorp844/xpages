@@ -1,5 +1,4 @@
 use relm4::adw;
-use relm4::adw::prelude::*;
 
 pub fn adwaita_is_dark() -> bool {
     adw::StyleManager::default().is_dark()
