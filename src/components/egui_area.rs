@@ -1,3 +1,7 @@
+//
+//  egui_area.rs
+//
+
 use gtk::subclass::prelude::*;
 use gtk::{glib, prelude::*};
 use std::{
@@ -8,8 +12,7 @@ use std::{
 };
 
 glib::wrapper! {
-    /// This type is a thin wrapper around a GObject subclass implemented in the
-    /// `imp` module below.
+    /// Thin wrapper around a GObject subclass implemented in the `imp` module.
     pub struct EguiArea(ObjectSubclass<imp::EguiArea>)
         @extends gtk::GLArea, gtk::Widget,
         @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
@@ -88,6 +91,7 @@ mod imp {
             let obj = self.obj().clone();
             obj.set_can_focus(true);
             obj.set_focusable(true);
+            obj.set_focus_on_click(true);
             obj.set_hexpand(true);
             obj.set_vexpand(true);
 
@@ -129,7 +133,7 @@ mod imp {
                     if let Some(obj) = obj.upgrade() {
                         let mut events = obj.imp().input_events.borrow_mut();
                         events.push(egui::Event::Ime(egui::ImeEvent::Commit(text.to_string())));
-                    };
+                    }
                 });
 
                 let obj = self.obj().downgrade();
@@ -246,24 +250,41 @@ mod imp {
         fn render(&self, _context: &gdk::GLContext) -> glib::Propagation {
             let area = self.obj();
 
-            // effective_ppp = display_scale × GNOME text_scale
-            let effective_ppp = self.effective_scale();
+            // ---------------------------------------------------------------
+            // Coordinate system (Linux / macOS / Windows)
+            //
+            // • GTK always reports width/height and pointer events in
+            //   *logical points*.
+            // • The real OpenGL drawable is in *physical pixels*
+            //   = logical × surface.scale_factor().
+            // • We tell egui:
+            //     screen_rect  = logical size
+            //     pixels_per_point = effective_scale()
+            // • Pointer events are left untouched (already logical).
+            // ---------------------------------------------------------------
 
-            // The physical framebuffer matches the widget's device pixels.
-            let screen_size_pixels = self.native_size();
+            let display_scale = self.scale_factor().max(1.0);
+            let ppp = self.effective_scale(); // may include text-scale on Linux
 
-            // Tell egui how many physical pixels a virtual point occupies.
-            // This drives both rasterization scale and font size.
-            self.egui_ctx.set_pixels_per_point(effective_ppp);
+            let logical_w = area.width() as f32;
+            let logical_h = area.height() as f32;
 
-            // IMPORTANT: the virtual screen that egui lays out in must be
-            // physical size / effective_ppp. Otherwise egui's layout extends
-            // beyond the framebuffer and click coordinates land wrong.
-            let virtual_w = area.width() as f32 / effective_ppp;
-            let virtual_h = area.height() as f32 / effective_ppp;
+            // Guard against zero-size allocations during resize
+            if logical_w <= 0.0 || logical_h <= 0.0 {
+                return glib::Propagation::Stop;
+            }
+
+            // Physical framebuffer size (what the GL context actually has)
+            let physical = [
+                (logical_w * display_scale).round().max(1.0) as u32,
+                (logical_h * display_scale).round().max(1.0) as u32,
+            ];
+
+            self.egui_ctx.set_pixels_per_point(ppp);
 
             let bg_color = self.egui_ctx.global_style().visuals.window_fill();
 
+            // Focus / IME
             let focused_now = area.has_focus();
             if focused_now != self.focused.get() {
                 self.focused.set(focused_now);
@@ -277,61 +298,33 @@ mod imp {
             }
 
             let mut painter_guard = self.painter.borrow_mut();
-            let painter = painter_guard.as_mut().unwrap();
+            let Some(painter) = painter_guard.as_mut() else {
+                return glib::Propagation::Stop;
+            };
 
-            // Force GL viewport to the physical framebuffer size so egui's
-            // output doesn't get clipped by GTK's own smaller viewport.
+            // Make sure the GL viewport covers the whole physical drawable
             unsafe {
                 use egui_glow::glow::HasContext;
                 let gl = painter.gl();
-                gl.viewport(
-                    0,
-                    0,
-                    screen_size_pixels[0] as i32,
-                    screen_size_pixels[1] as i32,
-                );
+                gl.viewport(0, 0, physical[0] as i32, physical[1] as i32);
             }
 
-            painter.clear(screen_size_pixels, bg_color.to_normalized_gamma_f32());
+            painter.clear(physical, bg_color.to_normalized_gamma_f32());
 
             if let Some(run_ui) = self.run_ui.borrow().as_ref() {
                 let input_events: Vec<egui::Event> =
                     std::mem::take(self.input_events.borrow_mut().as_mut());
 
-                // Pointer events come from GTK in *logical* widget points
-                // (i.e. area.width() scale). egui expects them in *virtual*
-                // points (physical / effective_ppp). Convert.
-                let converted_events: Vec<egui::Event> = input_events
-                    .into_iter()
-                    .map(|ev| match ev {
-                        egui::Event::PointerMoved(p) => {
-                            egui::Event::PointerMoved(p / effective_ppp)
-                        }
-                        egui::Event::PointerButton {
-                            pos,
-                            button,
-                            pressed,
-                            modifiers,
-                        } => egui::Event::PointerButton {
-                            pos: pos / effective_ppp,
-                            button,
-                            pressed,
-                            modifiers,
-                        },
-                        other => other,
-                    })
-                    .collect();
-
                 let input = egui::RawInput {
-                    events: converted_events,
+                    events: input_events,
                     screen_rect: Some(egui::Rect::from_min_size(
-                        Default::default(),
-                        egui::Vec2::new(virtual_w, virtual_h),
+                        egui::Pos2::ZERO,
+                        egui::vec2(logical_w, logical_h),
                     )),
                     viewports: [(
                         egui::ViewportId::ROOT,
                         egui::ViewportInfo {
-                            native_pixels_per_point: Some(effective_ppp),
+                            native_pixels_per_point: Some(ppp),
                             focused: Some(focused_now),
                             ..Default::default()
                         },
@@ -342,7 +335,10 @@ mod imp {
                     ..egui::RawInput::default()
                 };
 
-                let mut full_output = self.egui_ctx.run_ui(input, |ui| run_ui(ui));
+                // egui 0.37 API
+                let mut full_output = self.egui_ctx.run_ui(input, |ui| {
+                    run_ui(ui);
+                });
 
                 self.apply_gtk_cursor(&full_output.platform_output.cursor_icon);
                 self.handle_platform_output(full_output.platform_output);
@@ -350,9 +346,10 @@ mod imp {
                 let clipped_primitives = self
                     .egui_ctx
                     .tessellate(full_output.shapes, full_output.pixels_per_point);
+
                 painter.paint_and_update_textures(
-                    screen_size_pixels,
-                    self.egui_ctx.pixels_per_point(),
+                    physical,
+                    ppp,
                     &clipped_primitives,
                     &mut full_output.textures_delta,
                 );
@@ -372,27 +369,25 @@ mod imp {
             1.0
         }
 
-        /// display_scale × GNOME text_scale.
+        /// Platform-aware pixels-per-point.
+        ///
+        /// - macOS / Windows → surface scale only
+        /// - Linux (GNOME)  → surface scale × text scale (gtk-xft-dpi)
         fn effective_scale(&self) -> f32 {
             let display = self.scale_factor().max(1.0);
 
             #[cfg(target_os = "macos")]
             {
-                // On macOS just trust the surface scale factor.
-                // gtk-xft-dpi is unreliable / often 0.
                 display
             }
 
             #[cfg(target_os = "windows")]
             {
-                // Windows: trust the surface scale factor.
-                // Text scaling is better handled by the system / GTK settings.
                 display
             }
 
-            #[cfg(target_os = "linux")]
+            #[cfg(all(unix, not(target_os = "macos")))]
             {
-                // On Linux keep the GNOME text-scale behaviour
                 let text_scale = gtk::Settings::default()
                     .map(|s| {
                         let dpi = s.property::<i32>("gtk-xft-dpi") as f32 / 1024.0;
@@ -407,16 +402,6 @@ mod imp {
             }
         }
 
-        fn native_size(&self) -> [u32; 2] {
-            let scale_factor = self.scale_factor();
-            let width = self.obj().width() as f32;
-            let height = self.obj().height() as f32;
-            [
-                (width * scale_factor) as u32,
-                (height * scale_factor) as u32,
-            ]
-        }
-
         fn handle_platform_output(&self, output: egui::PlatformOutput) {
             for cmd in output.commands {
                 match cmd {
@@ -427,7 +412,7 @@ mod imp {
                         }
                     }
                     egui::OutputCommand::CopyImage(_image) => {
-                        eprintln!("Not Planned");
+                        eprintln!("CopyImage not implemented");
                     }
                     egui::OutputCommand::OpenUrl(open) => {
                         let window = self
@@ -479,8 +464,9 @@ mod imp {
             let current_modifiers = self.modifiers.clone();
             current_modifiers.set(egui::Modifiers::default());
 
+            // ---- Pointer click -------------------------------------------------
             let gesture_click = gtk::GestureClick::new();
-            gesture_click.set_button(0);
+            gesture_click.set_button(0); // any button
             {
                 let obj = obj.clone();
                 let current_modifiers = current_modifiers.clone();
@@ -490,6 +476,7 @@ mod imp {
                     let button = match gesture.current_button() {
                         1 => egui::PointerButton::Primary,
                         3 => egui::PointerButton::Secondary,
+                        2 => egui::PointerButton::Middle,
                         _ => return,
                     };
                     events.push(egui::Event::PointerButton {
@@ -508,6 +495,7 @@ mod imp {
                     let button = match gesture.current_button() {
                         1 => egui::PointerButton::Primary,
                         3 => egui::PointerButton::Secondary,
+                        2 => egui::PointerButton::Middle,
                         _ => return,
                     };
                     events.push(egui::Event::PointerButton {
@@ -519,6 +507,7 @@ mod imp {
                 });
             }
 
+            // ---- Pointer motion ------------------------------------------------
             let motion = gtk::EventControllerMotion::new();
             {
                 let obj = obj.clone();
@@ -535,6 +524,7 @@ mod imp {
                 });
             }
 
+            // ---- Scroll --------------------------------------------------------
             let scroll = gtk::EventControllerScroll::new(
                 gtk::EventControllerScrollFlags::BOTH_AXES
                     | gtk::EventControllerScrollFlags::DISCRETE,
@@ -555,6 +545,7 @@ mod imp {
                 });
             }
 
+            // ---- Keyboard ------------------------------------------------------
             let key_controller = gtk::EventControllerKey::new();
             {
                 let obj = obj.clone();
@@ -641,8 +632,9 @@ mod imp {
         fn apply_gtk_cursor(&self, icon: &egui::CursorIcon) {
             use gtk::gdk::Cursor;
             use std::cell::RefCell;
+
             thread_local! {
-                static CURRENT: RefCell<Option<egui::CursorIcon>> = RefCell::new(None);
+                static CURRENT: RefCell<Option<egui::CursorIcon>> = const { RefCell::new(None) };
             }
 
             let changed = CURRENT.with(|c| {
@@ -650,13 +642,13 @@ mod imp {
                 if c.as_ref() == Some(icon) {
                     false
                 } else {
-                    *c = Some(icon.clone());
+                    *c = Some(*icon);
                     true
                 }
             });
 
             if !changed {
-                return; // Skip if the cursor hasn't changed
+                return;
             }
 
             let name: Option<&str> = match icon {
@@ -695,6 +687,10 @@ mod imp {
             self.obj().set_cursor(cursor.as_ref());
         }
     }
+
+    // ---------------------------------------------------------------------------
+    // Helpers
+    // ---------------------------------------------------------------------------
 
     fn gdk_to_egui_key(key: gdk::Key) -> Option<egui::Key> {
         use egui::Key as EKey;
@@ -778,8 +774,10 @@ mod imp {
             #[cfg(target_os = "macos")]
             let library =
                 unsafe { libloading::os::unix::Library::new("libepoxy.0.dylib").unwrap() };
+
             #[cfg(all(unix, not(target_os = "macos")))]
             let library = unsafe { libloading::os::unix::Library::new("libepoxy.so.0").unwrap() };
+
             #[cfg(windows)]
             let library = libloading::os::windows::Library::open_already_loaded("libepoxy-0.dll")
                 .or_else(|_| libloading::os::windows::Library::open_already_loaded("epoxy-0.dll"))
