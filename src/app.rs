@@ -6,12 +6,12 @@ use std::sync::Once;
 use relm4::{adw, adw::prelude::*, prelude::*};
 use serde_json::json;
 
-use crate::components::EguiArea;
 use crate::components::sidebar::rebuild_thumb_list;
+use crate::components::{EguiArea, MainMenuButton};
 use crate::editor::input::handle_editing;
 use crate::state::DocumentCanvas;
-use crate::utils::theme::{adwaita_is_dark, transparent_visuals};
 use crate::utils::fonts::setup_cjk_fonts;
+use crate::utils::theme::{adwaita_is_dark, transparent_visuals};
 
 #[derive(Debug)]
 pub enum AppMsg {
@@ -33,6 +33,7 @@ pub struct XPagesApp {
     status: String,
     page_count: usize,
     thumb_list: Option<gtk::ListBox>,
+    main_menu_button: Controller<MainMenuButton>,
 }
 
 #[relm4::component(pub)]
@@ -62,17 +63,23 @@ impl SimpleComponent for XPagesApp {
                             set_label: "Pages",
                             add_css_class: "title",
                         },
+                        pack_end = model.main_menu_button.widget() {}
                     },
                     #[wrap(Some)]
                     #[name = "thumb_scroll"]
                     set_content = &gtk::ScrolledWindow {
                         set_vexpand: true,
                         set_policy: (gtk::PolicyType::Never, gtk::PolicyType::Automatic),
+
+                        // --- GNOME Document Viewer behavior ---
+                        // ListBox packs tightly at top, does NOT stretch its rows.
                         #[wrap(Some)]
                         #[name = "thumb_list"]
                         set_child = &gtk::ListBox {
                             set_selection_mode: gtk::SelectionMode::Single,
                             add_css_class: "navigation-sidebar",
+                            set_valign: gtk::Align::Start,
+                            set_vexpand: false,
                         },
                     },
                 },
@@ -80,18 +87,85 @@ impl SimpleComponent for XPagesApp {
                 #[wrap(Some)]
                 set_content = &adw::ToolbarView {
                     add_top_bar = &adw::HeaderBar {
-                        pack_start = &gtk::Button {
-                            set_label: "Open",
-                            set_tooltip_text: Some("Open a document"),
-                            connect_clicked => AppMsg::RequestOpen,
-                        },
                         #[wrap(Some)]
                         set_title_widget = &adw::WindowTitle {
-                            set_title: "XPages",
                             #[watch]
-                            set_subtitle: &model.subtitle,
+                            set_title: &model.subtitle,
                         },
                     },
+
+                    add_top_bar = &gtk::Box {
+                        set_orientation: gtk::Orientation::Horizontal,
+                        set_margin_horizontal: 20,
+                        set_margin_vertical: 6,
+                        set_spacing: 12,
+                        add_css_class: "toolbar",
+
+                        // START
+                        gtk::Box {
+                            set_orientation: gtk::Orientation::Horizontal,
+                            set_halign: gtk::Align::Start,
+                            add_css_class: "linked",
+
+                            gtk::Button {
+                                set_icon_name: "edit-undo-symbolic",
+                                set_tooltip_text: Some("Undo"),
+                            },
+                            gtk::Button {
+                                set_icon_name: "edit-redo-symbolic",
+                                set_tooltip_text: Some("Redo"),
+                            },
+                        },
+
+                        // CENTER
+                        gtk::Box {
+                            set_orientation: gtk::Orientation::Horizontal,
+                            set_halign: gtk::Align::Center,
+                            set_hexpand: true,
+                            set_spacing: 12,
+
+                            gtk::Button {
+                                set_icon_name: "add-page-symbolic",
+                                set_tooltip_text: Some("Insert Page"),
+                            },
+                            gtk::Button {
+                                set_icon_name: "shape-text-data-symbolic",
+                                set_tooltip_text: Some("Insert Text"),
+                            },
+                            gtk::Button {
+                                set_icon_name: "am-pie-symbolic",
+                                set_tooltip_text: Some("Insert Graph"),
+                            },
+                            gtk::Button {
+                                set_icon_name: "pen-shaper-symbolic",
+                                set_tooltip_text: Some("Insert Shape"),
+                            },
+                            gtk::Button {
+                                set_icon_name: "multimedia-photo-viewer-symbolic",
+                                set_tooltip_text: Some("Insert Media"),
+                            },
+                            gtk::Button {
+                                set_icon_name: "link-symbolic",
+                                set_tooltip_text: Some("Insert Link"),
+                            },
+                            gtk::Button {
+                                set_icon_name: "mxml-comment-symbolic",
+                                set_tooltip_text: Some("Insert Comment"),
+                            },
+                        },
+
+                        // END
+                        gtk::Box {
+                            set_orientation: gtk::Orientation::Horizontal,
+                            set_halign: gtk::Align::End,
+
+                            gtk::Button {
+                                set_icon_name: "share-symbolic",
+                                set_tooltip_text: Some("Share"),
+                            },
+                        },
+                    },
+
                     #[wrap(Some)]
                     #[name = "content_box"]
                     set_content = &gtk::Box {
@@ -109,12 +183,15 @@ impl SimpleComponent for XPagesApp {
         _root: Self::Root,
         sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
-        let session = Rc::new(RefCell::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new())));
+        let session = Rc::new(RefCell::new(wordcraft_engine::Session::new(
+            wordcraft_doc::Document::new(),
+        )));
         let has_document = Rc::new(RefCell::new(false));
         let canvas = Rc::new(RefCell::new(DocumentCanvas::default()));
         let scroll_to_page = Rc::new(RefCell::new(None));
         let is_dark = Rc::new(RefCell::new(adwaita_is_dark()));
 
+        let main_menu_button = MainMenuButton::builder().launch(()).detach();
         let mut model = XPagesApp {
             egui_area: None,
             session: Rc::clone(&session),
@@ -126,6 +203,7 @@ impl SimpleComponent for XPagesApp {
             status: String::new(),
             page_count: 0,
             thumb_list: None,
+            main_menu_button,
         };
 
         let widgets = view_output!();
@@ -170,7 +248,6 @@ impl SimpleComponent for XPagesApp {
             egui::CentralPanel::default()
                 .frame(egui::Frame::NONE.fill(egui::Color32::TRANSPARENT))
                 .show(ui, |ui| {
-                    // FIX: Force the UI to take up all available space so the scroll area works
                     ui.set_min_size(ui.available_size());
 
                     if !*has_document_for_ui.borrow() {
@@ -223,8 +300,10 @@ impl SimpleComponent for XPagesApp {
                 dialog.set_filters(Some(&filters));
 
                 let sender = sender.clone();
-                dialog.open(None::<&gtk::Window>, None::<&gtk::gio::Cancellable>, move |result| {
-                    match result {
+                dialog.open(
+                    None::<&gtk::Window>,
+                    None::<&gtk::gio::Cancellable>,
+                    move |result| match result {
                         Ok(file) => {
                             if let Some(path) = file.path() {
                                 sender.input(AppMsg::OpenPath(path));
@@ -237,19 +316,23 @@ impl SimpleComponent for XPagesApp {
                                 sender.input(AppMsg::OpenFailed(err.to_string()));
                             }
                         }
-                    }
-                });
+                    },
+                );
             }
 
             AppMsg::OpenPath(path) => {
-                let mut new_session = wordcraft_engine::Session::new(wordcraft_doc::Document::new());
+                let mut new_session =
+                    wordcraft_engine::Session::new(wordcraft_doc::Document::new());
                 match new_session.run("file.open", &json!({ "path": path.to_string_lossy() })) {
                     Ok(_) => {
                         let page_count = new_session.layout().pages.len();
                         *self.session.borrow_mut() = new_session;
                         self.canvas.borrow_mut().clear();
                         *self.scroll_to_page.borrow_mut() = Some(0);
-                        self.subtitle = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| path.display().to_string());
+                        self.subtitle = path
+                            .file_name()
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .unwrap_or_else(|| path.display().to_string());
                         *self.has_document.borrow_mut() = true;
                         self.status.clear();
                         self.page_count = page_count;

@@ -177,25 +177,69 @@ mod imp {
         fn compute_expand(&self, hexpand: &mut bool, vexpand: &mut bool) {
             self.parent_compute_expand(hexpand, vexpand)
         }
-        fn contains(&self, x: f64, y: f64) -> bool { self.parent_contains(x, y) }
-        fn direction_changed(&self, previous_direction: gtk::TextDirection) { self.parent_direction_changed(previous_direction) }
-        fn focus(&self, direction_type: gtk::DirectionType) -> bool { self.parent_focus(direction_type) }
-        fn request_mode(&self) -> gtk::SizeRequestMode { self.parent_request_mode() }
-        fn grab_focus(&self) -> bool { self.parent_grab_focus() }
-        fn keynav_failed(&self, direction_type: gtk::DirectionType) -> bool { self.parent_keynav_failed(direction_type) }
-        fn map(&self) { self.parent_map() }
-        fn measure(&self, orientation: gtk::Orientation, for_size: i32) -> (i32, i32, i32, i32) { self.parent_measure(orientation, for_size) }
-        fn mnemonic_activate(&self, group_cycling: bool) -> bool { self.parent_mnemonic_activate(group_cycling) }
-        fn move_focus(&self, direction_type: gtk::DirectionType) { self.parent_move_focus(direction_type) }
-        fn query_tooltip(&self, x: i32, y: i32, keyboard_tooltip: bool, tooltip: &gtk::Tooltip) -> bool { self.parent_query_tooltip(x, y, keyboard_tooltip, tooltip) }
-        fn root(&self) { self.parent_root() }
-        fn set_focus_child(&self, child: Option<&gtk::Widget>) { self.parent_set_focus_child(child) }
-        fn size_allocate(&self, width: i32, height: i32, baseline: i32) { self.parent_size_allocate(width, height, baseline) }
-        fn snapshot(&self, snapshot: &gtk::Snapshot) { self.parent_snapshot(snapshot) }
-        fn state_flags_changed(&self, state_flags: &gtk::StateFlags) { self.parent_state_flags_changed(state_flags) }
-        fn system_setting_changed(&self, settings: &gtk::SystemSetting) { self.parent_system_setting_changed(settings) }
-        fn unmap(&self) { self.parent_unmap() }
-        fn unroot(&self) { self.parent_unroot() }
+        fn contains(&self, x: f64, y: f64) -> bool {
+            self.parent_contains(x, y)
+        }
+        fn direction_changed(&self, previous_direction: gtk::TextDirection) {
+            self.parent_direction_changed(previous_direction)
+        }
+        fn focus(&self, direction_type: gtk::DirectionType) -> bool {
+            self.parent_focus(direction_type)
+        }
+        fn request_mode(&self) -> gtk::SizeRequestMode {
+            self.parent_request_mode()
+        }
+        fn grab_focus(&self) -> bool {
+            self.parent_grab_focus()
+        }
+        fn keynav_failed(&self, direction_type: gtk::DirectionType) -> bool {
+            self.parent_keynav_failed(direction_type)
+        }
+        fn map(&self) {
+            self.parent_map()
+        }
+        fn measure(&self, orientation: gtk::Orientation, for_size: i32) -> (i32, i32, i32, i32) {
+            self.parent_measure(orientation, for_size)
+        }
+        fn mnemonic_activate(&self, group_cycling: bool) -> bool {
+            self.parent_mnemonic_activate(group_cycling)
+        }
+        fn move_focus(&self, direction_type: gtk::DirectionType) {
+            self.parent_move_focus(direction_type)
+        }
+        fn query_tooltip(
+            &self,
+            x: i32,
+            y: i32,
+            keyboard_tooltip: bool,
+            tooltip: &gtk::Tooltip,
+        ) -> bool {
+            self.parent_query_tooltip(x, y, keyboard_tooltip, tooltip)
+        }
+        fn root(&self) {
+            self.parent_root()
+        }
+        fn set_focus_child(&self, child: Option<&gtk::Widget>) {
+            self.parent_set_focus_child(child)
+        }
+        fn size_allocate(&self, width: i32, height: i32, baseline: i32) {
+            self.parent_size_allocate(width, height, baseline)
+        }
+        fn snapshot(&self, snapshot: &gtk::Snapshot) {
+            self.parent_snapshot(snapshot)
+        }
+        fn state_flags_changed(&self, state_flags: &gtk::StateFlags) {
+            self.parent_state_flags_changed(state_flags)
+        }
+        fn system_setting_changed(&self, settings: &gtk::SystemSetting) {
+            self.parent_system_setting_changed(settings)
+        }
+        fn unmap(&self) {
+            self.parent_unmap()
+        }
+        fn unroot(&self) {
+            self.parent_unroot()
+        }
     }
 
     impl GLAreaImpl for EguiArea {
@@ -224,7 +268,11 @@ mod imp {
             if focused_now != self.focused.get() {
                 self.focused.set(focused_now);
                 if let Some(im) = self.im_context.borrow().as_ref() {
-                    if focused_now { im.focus_in(); } else { im.focus_out(); }
+                    if focused_now {
+                        im.focus_in();
+                    } else {
+                        im.focus_out();
+                    }
                 }
             }
 
@@ -236,7 +284,12 @@ mod imp {
             unsafe {
                 use egui_glow::glow::HasContext;
                 let gl = painter.gl();
-                gl.viewport(0, 0, screen_size_pixels[0] as i32, screen_size_pixels[1] as i32);
+                gl.viewport(
+                    0,
+                    0,
+                    screen_size_pixels[0] as i32,
+                    screen_size_pixels[1] as i32,
+                );
             }
 
             painter.clear(screen_size_pixels, bg_color.to_normalized_gamma_f32());
@@ -255,7 +308,10 @@ mod imp {
                             egui::Event::PointerMoved(p / effective_ppp)
                         }
                         egui::Event::PointerButton {
-                            pos, button, pressed, modifiers,
+                            pos,
+                            button,
+                            pressed,
+                            modifiers,
                         } => egui::Event::PointerButton {
                             pos: pos / effective_ppp,
                             button,
@@ -288,6 +344,7 @@ mod imp {
 
                 let mut full_output = self.egui_ctx.run_ui(input, |ui| run_ui(ui));
 
+                self.apply_gtk_cursor(&full_output.platform_output.cursor_icon);
                 self.handle_platform_output(full_output.platform_output);
 
                 let clipped_primitives = self
@@ -557,6 +614,63 @@ mod imp {
             obj.add_controller(motion);
             obj.add_controller(scroll);
             obj.add_controller(key_controller);
+        }
+
+        fn apply_gtk_cursor(&self, icon: &egui::CursorIcon) {
+            use gtk::gdk::Cursor;
+            use std::cell::RefCell;
+            thread_local! {
+                static CURRENT: RefCell<Option<egui::CursorIcon>> = RefCell::new(None);
+            }
+
+            let changed = CURRENT.with(|c| {
+                let mut c = c.borrow_mut();
+                if c.as_ref() == Some(icon) {
+                    false
+                } else {
+                    *c = Some(icon.clone());
+                    true
+                }
+            });
+
+            if !changed {
+                return; // Skip if the cursor hasn't changed
+            }
+
+            let name: Option<&str> = match icon {
+                egui::CursorIcon::Text => Some("text"),
+                egui::CursorIcon::PointingHand => Some("pointer"),
+                egui::CursorIcon::Crosshair => Some("crosshair"),
+                egui::CursorIcon::Grab => Some("grab"),
+                egui::CursorIcon::Grabbing => Some("grabbing"),
+                egui::CursorIcon::ResizeHorizontal => Some("ew-resize"),
+                egui::CursorIcon::ResizeVertical => Some("ns-resize"),
+                egui::CursorIcon::ResizeNwSe => Some("nwse-resize"),
+                egui::CursorIcon::ResizeNeSw => Some("nesw-resize"),
+                egui::CursorIcon::Move => Some("move"),
+                egui::CursorIcon::NotAllowed => Some("not-allowed"),
+                egui::CursorIcon::Wait => Some("wait"),
+                egui::CursorIcon::Progress => Some("progress"),
+                egui::CursorIcon::Help => Some("help"),
+                egui::CursorIcon::ContextMenu => Some("context-menu"),
+                egui::CursorIcon::Cell => Some("cell"),
+                egui::CursorIcon::VerticalText => Some("vertical-text"),
+                egui::CursorIcon::Alias => Some("alias"),
+                egui::CursorIcon::Copy => Some("copy"),
+                egui::CursorIcon::NoDrop => Some("no-drop"),
+                egui::CursorIcon::AllScroll => Some("all-scroll"),
+                egui::CursorIcon::ZoomIn => Some("zoom-in"),
+                egui::CursorIcon::ZoomOut => Some("zoom-out"),
+                egui::CursorIcon::Default => None,
+                _ => None,
+            };
+
+            let cursor = match name {
+                Some(n) => Cursor::from_name(n, None),
+                None => Cursor::from_name("default", None),
+            };
+
+            self.obj().set_cursor(cursor.as_ref());
         }
     }
 

@@ -5,7 +5,11 @@ pub fn adwaita_is_dark() -> bool {
 }
 
 pub fn transparent_visuals(dark: bool) -> egui::Visuals {
-    let mut v = if dark { egui::Visuals::dark() } else { egui::Visuals::light() };
+    let mut v = if dark {
+        egui::Visuals::dark()
+    } else {
+        egui::Visuals::light()
+    };
     let clear = egui::Color32::TRANSPARENT;
 
     v.panel_fill = clear;
@@ -33,4 +37,24 @@ pub fn texture_key(pages: usize, scale_px: f32, rev: u64, ppp: f32) -> u64 {
     mix(&rev.to_le_bytes());
     mix(&ppp.to_le_bytes());
     h
+}
+
+/// Reads the current libadwaita `@accent_bg_color` from the GTK theme.
+/// Falls back to the standard Adwaita blue if not found.
+#[allow(deprecated)]
+pub fn adwaita_accent_color() -> egui::Color32 {
+    use gtk::prelude::*;
+
+    let widget = gtk::Label::new(None);
+    if let Some(rgba) = widget.style_context().lookup_color("accent_bg_color") {
+        return egui::Color32::from_rgba_unmultiplied(
+            (rgba.red() * 255.0).round() as u8,
+            (rgba.green() * 255.0).round() as u8,
+            (rgba.blue() * 255.0).round() as u8,
+            (rgba.alpha() * 255.0).round() as u8,
+        );
+    }
+
+    // Fallback: standard Adwaita blue
+    egui::Color32::from_rgb(0x35, 0x84, 0xe4)
 }

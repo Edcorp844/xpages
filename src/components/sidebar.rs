@@ -1,6 +1,6 @@
+use gtk::prelude::*;
 use std::cell::RefCell;
 use std::rc::Rc;
-use gtk::prelude::*;
 
 pub fn rebuild_thumb_list(
     list: &gtk::ListBox,
@@ -51,8 +51,15 @@ fn page_to_texture(
 ) -> Option<gtk::gdk::MemoryTexture> {
     let layout = session.layout();
     let page = layout.pages.get(page_index)?;
-    let img = wordcraft_render::render_page(&session.doc, page, scale, &wordcraft_render::RenderOptions::default());
-    if img.width == 0 || img.height == 0 { return None; }
+    let img = wordcraft_render::render_page(
+        &session.doc,
+        page,
+        scale,
+        &wordcraft_render::RenderOptions::default(),
+    );
+    if img.width == 0 || img.height == 0 {
+        return None;
+    }
 
     let bytes = gtk::glib::Bytes::from(img.pixels.as_slice());
     Some(gtk::gdk::MemoryTexture::new(

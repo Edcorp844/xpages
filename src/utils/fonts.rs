@@ -10,7 +10,11 @@ pub fn setup_cjk_fonts(ctx: &egui::Context) {
                 std::sync::Arc::new(egui::FontData::from_owned(data)),
             );
             for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
-                fonts.families.entry(family).or_default().push(name.to_owned());
+                fonts
+                    .families
+                    .entry(family)
+                    .or_default()
+                    .push(name.to_owned());
             }
             ctx.set_fonts(fonts);
         }

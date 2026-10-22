@@ -4,8 +4,9 @@ pub fn draw_selection(
     selection_rects: &[(usize, wordcraft_geom::Rect)],
     page_index: usize,
     logical_scale: f32,
+    accent_color: egui::Color32, // NEW: 6th argument
 ) {
-    let sel_fill = egui::Color32::from_rgba_unmultiplied(0x30, 0x60, 0xd0, 80);
+    let sel_fill = accent_color.gamma_multiply(0.4);
     for (rpage, r) in selection_rects {
         if *rpage != page_index {
             continue;
@@ -31,7 +32,7 @@ pub fn draw_caret(
                 page_rect.min + egui::vec2(c.x * logical_scale, c.top * logical_scale),
                 egui::vec2(c.width.max(1.5), c.height * logical_scale),
             );
-            painter.rect_filled(r, 0.0, egui::Color32::from_rgb(0x30, 0x60, 0xd0));
+            painter.rect_filled(r, 0.0, egui::Color32::BLACK);
         }
     }
 }
