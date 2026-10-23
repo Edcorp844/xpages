@@ -62,9 +62,7 @@ impl DocumentCanvas {
             zoom_changed = true;
         }
 
-        let (cmd, scroll_y) = ui.input(|i| {
-            (i.modifiers.command, i.smooth_scroll_delta.y)
-        });
+        let (cmd, scroll_y) = ui.input(|i| (i.modifiers.command, i.smooth_scroll_delta.y));
 
         if cmd && scroll_y.abs() > 0.0 {
             let factor = if scroll_y > 0.0 {
@@ -85,6 +83,11 @@ impl DocumentCanvas {
             self.textures.clear();
             ui.ctx().request_repaint();
         }
+
+        let scroll_scale: f32 = 3.0;
+        ui.ctx().input_mut(|i| {
+            i.smooth_scroll_delta *= scroll_scale;
+        });
 
         let logical_scale = self.zoom * PX_PER_PT;
 
