@@ -60,6 +60,16 @@ mod imp {
 
     type DynGuiFn = Box<dyn Fn(&mut egui::Ui)>;
 
+    /// Soften wheel deltas so trackpad / mouse feel similar on Linux & macOS.
+    #[cfg(target_os = "macos")]
+    const SCROLL_GAIN: f32 = 0.40;
+    #[cfg(not(target_os = "macos"))]
+    const SCROLL_GAIN: f32 = 0.28; // Linux discrete wheels tend to be larger
+
+    /// Cap a single zoom step so Linux pinch/ctrl-scroll is less chunky.
+    const ZOOM_STEP_MIN: f32 = 0.92;
+    const ZOOM_STEP_MAX: f32 = 1.08;
+
     #[derive(Default)]
     pub struct EguiArea {
         painter: RefCell<Option<egui_glow::Painter>>,
@@ -71,6 +81,8 @@ mod imp {
         focused: Cell<bool>,
         modifiers: Rc<Cell<egui::Modifiers>>,
         tick_id: RefCell<Option<gtk::TickCallbackId>>,
+        /// Cached GL max texture size (queried once after realize).
+        max_texture_side: Cell<usize>,
     }
 
     #[glib::object_subclass]
@@ -85,6 +97,7 @@ mod imp {
             self.parent_constructed();
 
             init_epoxy();
+            self.max_texture_side.set(8192);
 
             let obj = self.obj().clone();
             obj.set_can_focus(true);
@@ -161,6 +174,16 @@ mod imp {
             self.obj().make_current();
             let gl = unsafe { glow::Context::from_loader_function(epoxy::get_proc_addr) };
             let gl = Arc::new(gl);
+
+            // Query real GPU limit so page textures can be larger (sharper zoom)
+            let max_side = unsafe {
+                use egui_glow::glow::HasContext;
+                gl.get_parameter_i32(glow::MAX_TEXTURE_SIZE)
+            };
+            if max_side > 0 {
+                self.max_texture_side.set(max_side as usize);
+            }
+
             *self.painter.borrow_mut() = Some(
                 egui_glow::Painter::new(gl, "", None, true).expect("Failed to create painter"),
             );
@@ -248,22 +271,6 @@ mod imp {
         fn render(&self, _context: &gdk::GLContext) -> glib::Propagation {
             let area = self.obj();
 
-            // ---------------------------------------------------------------
-            // Coordinate system (Linux / macOS / Windows)
-            //
-            // GTK reports width/height and pointer events in *logical points*.
-            // The real OpenGL drawable is *physical pixels* =
-            //   logical × surface.scale_factor()   (display scale only)
-            //
-            // Accessibility text scale (GNOME Large Text) is handled by:
-            //   • shrinking the virtual screen  (logical / text)
-            //   • raising pixels_per_point      (display × text)
-            //   • converting pointer events     (pos / text)
-            // so fonts stay sharp and the UI grows with the rest of the desktop.
-            //
-            // On macOS / Windows text_scale is always 1.0.
-            // ---------------------------------------------------------------
-
             let display = self.scale_factor().max(1.0);
             let text = self.text_scale();
             let ppp = (display * text).max(1.0);
@@ -275,13 +282,11 @@ mod imp {
                 return glib::Propagation::Stop;
             }
 
-            // Real framebuffer size – never includes text scale
             let physical = [
                 (logical_w * display).round().max(1.0) as u32,
                 (logical_h * display).round().max(1.0) as u32,
             ];
 
-            // Virtual size shrinks when text > 1 → UI elements become larger
             let virtual_w = logical_w / text;
             let virtual_h = logical_h / text;
 
@@ -318,8 +323,6 @@ mod imp {
                 let input_events: Vec<egui::Event> =
                     std::mem::take(self.input_events.borrow_mut().as_mut());
 
-                // Convert pointer events by the text-scale factor only.
-                // (On macOS/Windows text == 1.0 → no change.)
                 let converted_events: Vec<egui::Event> = input_events
                     .into_iter()
                     .map(|ev| match ev {
@@ -356,10 +359,11 @@ mod imp {
                     .into_iter()
                     .collect(),
                     focused: focused_now,
+                    // Let egui (and page textures) use the real GPU limit
+                    max_texture_side: Some(self.max_texture_side.get()),
                     ..egui::RawInput::default()
                 };
 
-                // egui 0.37 API
                 let mut full_output = self.egui_ctx.run_ui(input, |ui| {
                     run_ui(ui);
                 });
@@ -393,8 +397,6 @@ mod imp {
             1.0
         }
 
-        /// Accessibility / GNOME text scale.
-        /// Always 1.0 on macOS and Windows.
         fn text_scale(&self) -> f32 {
             #[cfg(all(unix, not(target_os = "macos")))]
             {
@@ -541,7 +543,9 @@ mod imp {
                 });
             }
 
-            // ---- Scroll --------------------------------------------------------
+            // ---- Scroll (smooth, continuous, damped) ---------------------------
+            // BOTH_AXES without DISCRETE → continuous trackpad / high-res wheel.
+            // Point unit + SCROLL_GAIN → fewer jumps on Linux and macOS.
             let scroll = gtk::EventControllerScroll::new(
                 gtk::EventControllerScrollFlags::BOTH_AXES,
             );
@@ -549,10 +553,16 @@ mod imp {
                 let obj = obj.clone();
                 let current_modifiers = current_modifiers.clone();
                 scroll.connect_scroll(move |_scroll, x, y| {
+                    let dx = (-x as f32) * SCROLL_GAIN;
+                    let dy = (-y as f32) * SCROLL_GAIN;
+                    // Ignore microscopic noise
+                    if dx.abs() < 0.01 && dy.abs() < 0.01 {
+                        return glib::Propagation::Proceed;
+                    }
                     let mut events = obj.imp().input_events.borrow_mut();
                     events.push(egui::Event::MouseWheel {
-                        unit: egui::MouseWheelUnit::Line,
-                        delta: egui::Vec2::new(-x as f32, -y as f32),
+                        unit: egui::MouseWheelUnit::Point,
+                        delta: egui::Vec2::new(dx, dy),
                         phase: egui::TouchPhase::Move,
                         modifiers: current_modifiers.get(),
                         source: egui::MouseWheelSource::Wheel,
@@ -561,8 +571,7 @@ mod imp {
                 });
             }
 
-            // ---- Pinch zoom (trackpad / touch) --------------------------------
-            // Use Rc<Cell<…>> so both closures can share last_scale.
+            // ---- Pinch zoom (smooth steps) -------------------------------------
             let zoom_gesture = gtk::GestureZoom::new();
             {
                 let last_scale = Rc::new(Cell::new(1.0_f64));
@@ -579,11 +588,14 @@ mod imp {
                     let last_scale = Rc::clone(&last_scale);
                     zoom_gesture.connect_scale_changed(move |_g, scale| {
                         let prev = last_scale.get();
-                        // Avoid div-by-zero if begin didn't fire
                         let prev = if prev <= 0.0 { 1.0 } else { prev };
-                        let factor = (scale / prev) as f32;
+                        let mut factor = (scale / prev) as f32;
                         last_scale.set(scale);
-                        if factor.is_finite() && (factor - 1.0).abs() > 0.0001 {
+
+                        // Clamp each step so Linux doesn't jump in big chunks
+                        factor = factor.clamp(ZOOM_STEP_MIN, ZOOM_STEP_MAX);
+
+                        if factor.is_finite() && (factor - 1.0).abs() > 0.0005 {
                             let mut events = obj.imp().input_events.borrow_mut();
                             events.push(egui::Event::Zoom(factor));
                         }
@@ -734,10 +746,6 @@ mod imp {
             self.obj().set_cursor(cursor.as_ref());
         }
     }
-
-    // ---------------------------------------------------------------------------
-    // Helpers
-    // ---------------------------------------------------------------------------
 
     fn gdk_to_egui_key(key: gdk::Key) -> Option<egui::Key> {
         use egui::Key as EKey;

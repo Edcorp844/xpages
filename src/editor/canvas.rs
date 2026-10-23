@@ -272,7 +272,7 @@ impl DocumentCanvas {
                                 let tex = ui.ctx().load_texture(
                                     format!("page{i}"),
                                     color,
-                                    egui::TextureOptions::NEAREST,
+                                    egui::TextureOptions::LINEAR,
                                 );
                                 self.textures.insert(i, (key, tex));
                             }
