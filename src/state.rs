@@ -11,6 +11,7 @@ pub struct DocumentCanvas {
     pub zoom: f32,
     pub last_scroll_y: f32,
     pub last_visible_page: Option<usize>,
+    pub scroll_offset: egui::Vec2
 }
 
 impl Default for DocumentCanvas {
@@ -25,6 +26,7 @@ impl Default for DocumentCanvas {
             zoom: 1.0,
             last_scroll_y: 0.0,
             last_visible_page: None,
+            scroll_offset: egui::Vec2::ZERO,
         }
     }
 }

@@ -1,4 +1,4 @@
-// document_canvas.rs — show() with zoom + smooth page scrolling
+// document_canvas.rs — stable zoom (viewport-anchored) + no flicker
 
 use super::caret::{draw_caret, draw_selection};
 use crate::state::DocumentCanvas;
@@ -52,12 +52,10 @@ impl DocumentCanvas {
         }
 
         // ------------------------------------------------------------------
-        // Zoom: pinch + Ctrl/Cmd+wheel
-        //
-        // The goal is: scroll does not move when zooming. The mechanism
-        // is to consume the scroll delta before the ScrollArea reads it,
-        // for BOTH the pinch path and the Ctrl/Cmd+wheel path.
+        // Zoom (pinch + Ctrl/Cmd+wheel)
+        // Keep the same content point under the viewport center.
         // ------------------------------------------------------------------
+        let old_zoom = self.zoom;
         let mut zoom_changed = false;
 
         let zoom_delta = ui.input(|i| i.zoom_delta());
@@ -66,10 +64,9 @@ impl DocumentCanvas {
             zoom_changed = true;
         }
 
-        let (cmd, scroll_y) = ui.input(|i| (i.modifiers.command, i.smooth_scroll_delta.y));
-
-        if cmd && scroll_y.abs() > 0.0 {
-            let factor = if scroll_y > 0.0 {
+        let (cmd, wheel_y) = ui.input(|i| (i.modifiers.command, i.smooth_scroll_delta.y));
+        if cmd && wheel_y.abs() > 0.0 {
+            let factor = if wheel_y > 0.0 {
                 ZOOM_STEP
             } else {
                 1.0 / ZOOM_STEP
@@ -78,21 +75,30 @@ impl DocumentCanvas {
             zoom_changed = true;
         }
 
+        // Never pan from the same gesture that zooms
         if zoom_changed {
-            // Consume any scroll the zoom gesture generated, so the
-            // ScrollArea has nothing to consume and the offset cannot
-            // move this frame. This is the only thing that stops the
-            // scroll during zoom.
             ui.ctx().input_mut(|i| {
                 i.smooth_scroll_delta = egui::Vec2::ZERO;
             });
+        }
+
+        // Scroll offsets to feed into ScrollArea this frame
+        let mut scroll_x = self.scroll_offset.x;
+        let mut scroll_y = self.scroll_offset.y;
+
+        if zoom_changed {
+            let ratio = self.zoom / old_zoom.max(1e-6);
+            // Viewport size of the scroll region (approx; good enough for anchoring)
+            let vh = ui.available_height().max(1.0);
+            let vw = ui.available_width().max(1.0);
+
+            let anchor_y = self.scroll_offset.y + vh * 0.5;
+            let anchor_x = self.scroll_offset.x + vw * 0.5;
+
+            scroll_y = (anchor_y * ratio - vh * 0.5).max(0.0);
+            scroll_x = (anchor_x * ratio - vw * 0.5).max(0.0);
+
             ui.ctx().request_repaint();
-        } else {
-            // Only apply scroll scaling on non-zoom frames.
-            let scroll_scale: f32 = 9.0;
-            ui.ctx().input_mut(|i| {
-                i.smooth_scroll_delta *= scroll_scale;
-            });
         }
 
         let logical_scale = self.zoom * PX_PER_PT;
@@ -137,22 +143,19 @@ impl DocumentCanvas {
                 .layout(*ui.layout()),
         );
 
-        egui::ScrollArea::both()
+        let output = egui::ScrollArea::both()
             .id_salt("doc_scroll")
             .auto_shrink([false, false])
             .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded)
-            .animated(true)
+            .animated(!zoom_changed)
+            .vertical_scroll_offset(scroll_y)
+            .horizontal_scroll_offset(scroll_x)
             .show(&mut scroll_ui, |ui| {
-                // ── Coordinate math ─────────────────────────────────
                 let frame_clip = ui.clip_rect();
                 let content_top = ui.cursor().top();
-
                 let viewport_center_content = (frame_clip.center().y - content_top) + RULER_GAP;
 
-                let scroll_delta = (content_top - self.last_scroll_y).abs();
-                let mid_scroll = scroll_delta > 4.0;
-
-                // Pass 1: find page nearest viewport center (content coords).
+                // Nearest page to viewport center
                 let mut closest_page_idx: Option<usize> = None;
                 let mut closest_dist = f32::INFINITY;
                 {
@@ -169,7 +172,6 @@ impl DocumentCanvas {
                         acc_y += row_h;
                     }
                 }
-
                 self.last_visible_page = closest_page_idx;
 
                 let n_pages = layout.pages.len();
@@ -212,20 +214,7 @@ impl DocumentCanvas {
 
                     let in_render_set =
                         closest_page_idx.is_some() && i >= render_lo && i <= render_hi;
-                    let cached = self.textures.contains_key(&i);
-
-                    if !cached {
-                        if mid_scroll || !in_render_set {
-                            painter.rect_filled(page_rect, 0.0, egui::Color32::from_gray(248));
-                            painter.rect_stroke(
-                                page_rect,
-                                0.0,
-                                egui::Stroke::new(1.0, egui::Color32::from_black_alpha(50)),
-                                egui::StrokeKind::Outside,
-                            );
-                            continue;
-                        }
-                    }
+                    let has_texture = self.textures.contains_key(&i);
 
                     if let Some(pos) = ui.ctx().pointer_hover_pos() {
                         if page_rect.contains(pos) {
@@ -233,7 +222,6 @@ impl DocumentCanvas {
                         }
                     }
 
-                    // Click → caret
                     if response.clicked() {
                         if let Some(pos) = response.interact_pointer_pos() {
                             if page_rect.contains(pos) {
@@ -257,7 +245,6 @@ impl DocumentCanvas {
                         }
                     }
 
-                    // Drag → select
                     if response.dragged() {
                         if let Some(pos) = response.interact_pointer_pos() {
                             if page_rect.contains(pos) {
@@ -286,6 +273,7 @@ impl DocumentCanvas {
                         egui::Color32::from_black_alpha(40),
                     );
 
+                    // Texture size (capped to GPU limit)
                     let mut phys_w = (page.w * logical_scale * ppp).ceil().max(1.0);
                     let mut phys_h = (page.h * logical_scale * ppp).ceil().max(1.0);
                     let longest = phys_w.max(phys_h);
@@ -302,13 +290,16 @@ impl DocumentCanvas {
                         rev,
                         ppp,
                     ) ^ ((i as u64) << 32);
+
                     let stale = self
                         .textures
                         .get(&i)
                         .map(|(k, _)| *k != key)
                         .unwrap_or(true);
 
-                    if stale && in_render_set {
+                    // Re-rasterize near viewport; never on the zoom frame itself
+                    // (keeps last texture visible → no flicker)
+                    if stale && in_render_set && !zoom_changed {
                         let img = wordcraft_render::render_page(
                             &session.doc,
                             page,
@@ -321,7 +312,7 @@ impl DocumentCanvas {
                         );
                         match self.textures.get_mut(&i) {
                             Some((k, tex)) => {
-                                tex.set(color, egui::TextureOptions::NEAREST);
+                                tex.set(color, egui::TextureOptions::LINEAR);
                                 *k = key;
                             }
                             None => {
@@ -342,6 +333,8 @@ impl DocumentCanvas {
                             egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
                             egui::Color32::WHITE,
                         );
+                    } else if !has_texture {
+                        painter.rect_filled(page_rect, 0.0, egui::Color32::from_gray(248));
                     }
 
                     draw_selection(
@@ -366,11 +359,10 @@ impl DocumentCanvas {
                 }
 
                 self.last_scroll_y = content_top;
-
-                if mid_scroll {
-                    ui.ctx().request_repaint();
-                }
             });
+
+        // Public API — field `offset` is private in egui 0.37
+        self.scroll_offset = output.state.clamped_offset();
 
         // Sticky rulers
         if first_page_rect.is_positive() {
