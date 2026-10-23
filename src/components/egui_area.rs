@@ -62,9 +62,9 @@ mod imp {
 
     /// Soften wheel deltas so trackpad / mouse feel similar on Linux & macOS.
     #[cfg(target_os = "macos")]
-    const SCROLL_GAIN: f32 = 0.80;
+    const SCROLL_GAIN: f32 = 0.40;
     #[cfg(not(target_os = "macos"))]
-    const SCROLL_GAIN: f32 = 0.38; // Linux discrete wheels tend to be larger
+    const SCROLL_GAIN: f32 = 0.28; // Linux discrete wheels tend to be larger
 
     /// Cap a single zoom step so Linux pinch/ctrl-scroll is less chunky.
     const ZOOM_STEP_MIN: f32 = 0.92;

@@ -52,7 +52,11 @@ impl DocumentCanvas {
         }
 
         // ------------------------------------------------------------------
-        // Zoom: pinch + Ctrl/Cmd+wheel (does NOT disable normal scrolling)
+        // Zoom: pinch + Ctrl/Cmd+wheel
+        //
+        // The goal is: scroll does not move when zooming. The mechanism
+        // is to consume the scroll delta before the ScrollArea reads it,
+        // for BOTH the pinch path and the Ctrl/Cmd+wheel path.
         // ------------------------------------------------------------------
         let mut zoom_changed = false;
 
@@ -72,22 +76,24 @@ impl DocumentCanvas {
             };
             self.set_zoom(self.zoom * factor);
             zoom_changed = true;
-
-            // Consume scroll so the document does not pan while zooming
-            ui.ctx().input_mut(|i| {
-                i.smooth_scroll_delta = egui::Vec2::ZERO;
-            });
         }
 
         if zoom_changed {
-            self.textures.clear();
+            // Consume any scroll the zoom gesture generated, so the
+            // ScrollArea has nothing to consume and the offset cannot
+            // move this frame. This is the only thing that stops the
+            // scroll during zoom.
+            ui.ctx().input_mut(|i| {
+                i.smooth_scroll_delta = egui::Vec2::ZERO;
+            });
             ui.ctx().request_repaint();
+        } else {
+            // Only apply scroll scaling on non-zoom frames.
+            let scroll_scale: f32 = 9.0;
+            ui.ctx().input_mut(|i| {
+                i.smooth_scroll_delta *= scroll_scale;
+            });
         }
-
-        let scroll_scale: f32 = 3.0;
-        ui.ctx().input_mut(|i| {
-            i.smooth_scroll_delta *= scroll_scale;
-        });
 
         let logical_scale = self.zoom * PX_PER_PT;
 
@@ -131,34 +137,54 @@ impl DocumentCanvas {
                 .layout(*ui.layout()),
         );
 
-        // Smooth continuous scrolling — defaults enabled (no .scroll(false))
         egui::ScrollArea::both()
             .id_salt("doc_scroll")
             .auto_shrink([false, false])
             .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded)
             .animated(true)
             .show(&mut scroll_ui, |ui| {
+                // ── Coordinate math ─────────────────────────────────
+                let frame_clip = ui.clip_rect();
+                let content_top = ui.cursor().top();
+
+                let viewport_center_content = (frame_clip.center().y - content_top) + RULER_GAP;
+
+                let scroll_delta = (content_top - self.last_scroll_y).abs();
+                let mid_scroll = scroll_delta > 4.0;
+
+                // Pass 1: find page nearest viewport center (content coords).
+                let mut closest_page_idx: Option<usize> = None;
+                let mut closest_dist = f32::INFINITY;
+                {
+                    let mut acc_y = 0.0_f32;
+                    for (i, page) in layout.pages.iter().enumerate() {
+                        let screen_h = (page.h * logical_scale * ppp).ceil() / ppp;
+                        let row_h = screen_h + PAGE_GAP;
+                        let row_center = acc_y + row_h * 0.5;
+                        let dist = (row_center - viewport_center_content).abs();
+                        if dist < closest_dist {
+                            closest_dist = dist;
+                            closest_page_idx = Some(i);
+                        }
+                        acc_y += row_h;
+                    }
+                }
+
+                self.last_visible_page = closest_page_idx;
+
+                let n_pages = layout.pages.len();
+                let (render_lo, render_hi) = match closest_page_idx {
+                    Some(c) => (c.saturating_sub(2), (c + 2).min(n_pages.saturating_sub(1))),
+                    None => (usize::MAX, 0),
+                };
+
                 ui.add_space(RULER_GAP);
 
                 let max_side = ui.ctx().input(|i| i.max_texture_side) as f32;
 
                 for (i, page) in layout.pages.iter().enumerate() {
-                    // Desired physical size at current zoom
-                    let mut phys_w = (page.w * logical_scale * ppp).ceil().max(1.0);
-                    let mut phys_h = (page.h * logical_scale * ppp).ceil().max(1.0);
-
-                    // Cap texture to GPU limit (prevents panic at high zoom)
-                    let longest = phys_w.max(phys_h);
-                    if longest > max_side {
-                        let s = max_side / longest;
-                        phys_w = (phys_w * s).floor().max(1.0);
-                        phys_h = (phys_h * s).floor().max(1.0);
-                    }
-
-                    // On-screen size follows zoom (may upscale a capped texture)
                     let screen_w = (page.w * logical_scale * ppp).ceil() / ppp;
                     let screen_h = (page.h * logical_scale * ppp).ceil() / ppp;
-                    let page_render_scale = phys_w / page.w;
 
                     let row_h = screen_h + PAGE_GAP;
                     let row_w = ui.available_width().max(screen_w + 64.0);
@@ -182,6 +208,23 @@ impl DocumentCanvas {
 
                     if i == 0 {
                         first_page_rect = page_rect;
+                    }
+
+                    let in_render_set =
+                        closest_page_idx.is_some() && i >= render_lo && i <= render_hi;
+                    let cached = self.textures.contains_key(&i);
+
+                    if !cached {
+                        if mid_scroll || !in_render_set {
+                            painter.rect_filled(page_rect, 0.0, egui::Color32::from_gray(248));
+                            painter.rect_stroke(
+                                page_rect,
+                                0.0,
+                                egui::Stroke::new(1.0, egui::Color32::from_black_alpha(50)),
+                                egui::StrokeKind::Outside,
+                            );
+                            continue;
+                        }
                     }
 
                     if let Some(pos) = ui.ctx().pointer_hover_pos() {
@@ -243,6 +286,16 @@ impl DocumentCanvas {
                         egui::Color32::from_black_alpha(40),
                     );
 
+                    let mut phys_w = (page.w * logical_scale * ppp).ceil().max(1.0);
+                    let mut phys_h = (page.h * logical_scale * ppp).ceil().max(1.0);
+                    let longest = phys_w.max(phys_h);
+                    if longest > max_side {
+                        let s = max_side / longest;
+                        phys_w = (phys_w * s).floor().max(1.0);
+                        phys_h = (phys_h * s).floor().max(1.0);
+                    }
+                    let page_render_scale = phys_w / page.w;
+
                     let key = crate::utils::theme::texture_key(
                         layout.pages.len(),
                         page_render_scale,
@@ -255,7 +308,7 @@ impl DocumentCanvas {
                         .map(|(k, _)| *k != key)
                         .unwrap_or(true);
 
-                    if stale {
+                    if stale && in_render_set {
                         let img = wordcraft_render::render_page(
                             &session.doc,
                             page,
@@ -310,6 +363,12 @@ impl DocumentCanvas {
                         egui::Stroke::new(1.0, egui::Color32::from_black_alpha(50)),
                         egui::StrokeKind::Outside,
                     );
+                }
+
+                self.last_scroll_y = content_top;
+
+                if mid_scroll {
+                    ui.ctx().request_repaint();
                 }
             });
 
@@ -516,9 +575,6 @@ impl DocumentCanvas {
         } else {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Default);
         }
-
-        let n = layout.pages.len();
-        self.textures.retain(|i, _| *i < n);
     }
 }
 

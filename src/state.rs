@@ -9,6 +9,8 @@ pub struct DocumentCanvas {
     pub last_blink: Instant,
     pub last_ppp: f32,
     pub zoom: f32,
+    pub last_scroll_y: f32,
+    pub last_visible_page: Option<usize>,
 }
 
 impl Default for DocumentCanvas {
@@ -21,6 +23,8 @@ impl Default for DocumentCanvas {
             last_blink: Instant::now(),
             last_ppp: 1.0,
             zoom: 1.0,
+            last_scroll_y: 0.0,
+            last_visible_page: None,
         }
     }
 }
