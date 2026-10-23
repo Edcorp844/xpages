@@ -8,6 +8,7 @@ pub struct DocumentCanvas {
     pub caret_visible: bool,
     pub last_blink: Instant,
     pub last_ppp: f32,
+    pub zoom: f32,
 }
 
 impl Default for DocumentCanvas {
@@ -19,6 +20,7 @@ impl Default for DocumentCanvas {
             caret_visible: true,
             last_blink: Instant::now(),
             last_ppp: 1.0,
+            zoom: 1.0,
         }
     }
 }

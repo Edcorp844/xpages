@@ -10,56 +10,58 @@ impl AppMenu {
     pub fn register() {
         let app = relm4::main_application();
 
+        // --- New ---
         let new_action = gtk::gio::SimpleAction::new("new", None);
-        new_action.connect_activate(move |_, _| {
-            println!("new requested");
-        });
         app.add_action(&new_action);
-        //app.set_accels_for_action("app.new", &["<Primary>n"]);
+        app.set_accels_for_action("app.new", &["<Primary>n"]);
 
+        // --- Open ---
         let open_action = gtk::gio::SimpleAction::new("open", None);
-        open_action.connect_activate(move |_, _| {
-            println!("open requested");
-        });
+        // handler is attached later in XPagesApp::init
         app.add_action(&open_action);
-        app.set_accels_for_action("app.open", &["<Primary><Shift>r"]);
+        app.set_accels_for_action("app.open", &["<Primary>o"]);
 
-        let save_action = gtk::gio::SimpleAction::new("open", None);
+        // --- Save ---
+        let save_action = gtk::gio::SimpleAction::new("save", None);
         save_action.connect_activate(move |_, _| {
             println!("save requested");
         });
         app.add_action(&save_action);
         app.set_accels_for_action("app.save", &["<Primary>s"]);
 
-        let save_as_action = gtk::gio::SimpleAction::new("open", None);
+        // --- Save As ---
+        let save_as_action = gtk::gio::SimpleAction::new("save_as", None);
         save_as_action.connect_activate(move |_, _| {
-            println!("saveas requested");
+            println!("save as requested");
         });
         app.add_action(&save_as_action);
         app.set_accels_for_action("app.save_as", &["<Primary><Shift>s"]);
 
-        let print_action = gtk::gio::SimpleAction::new("open", None);
+        // --- Print ---
+        let print_action = gtk::gio::SimpleAction::new("print", None);
         print_action.connect_activate(move |_, _| {
             println!("print requested");
         });
         app.add_action(&print_action);
         app.set_accels_for_action("app.print", &["<Primary>p"]);
 
-        let export_action = gtk::gio::SimpleAction::new("open", None);
+        // --- Export ---
+        let export_action = gtk::gio::SimpleAction::new("export", None);
         export_action.connect_activate(move |_, _| {
             println!("export requested");
         });
         app.add_action(&export_action);
         app.set_accels_for_action("app.export", &["<Primary>e"]);
 
+        // --- Preferences ---
         let preferences_action = gtk::gio::SimpleAction::new("preferences", None);
         preferences_action.connect_activate(move |_, _| {
             Self::show_preferences_window();
         });
-
         app.add_action(&preferences_action);
         app.set_accels_for_action("app.preferences", &["<Primary>comma"]);
 
+        // --- Shortcuts ---
         let shortcuts_action = gtk::gio::SimpleAction::new("shortcuts", None);
         shortcuts_action.connect_activate(move |_, _| {
             Self::show_shortcuts_window();
@@ -67,18 +69,23 @@ impl AppMenu {
         app.add_action(&shortcuts_action);
         app.set_accels_for_action("app.shortcuts", &["<Primary>question"]);
 
+        // --- About ---
         let about_action = gtk::gio::SimpleAction::new("about", None);
         about_action.connect_activate(move |_, _| {
             Self::show_about_window();
         });
         app.add_action(&about_action);
 
-        let help_action = gtk::gio::SimpleAction::new("about", None);
+        // --- Help ---
+        let help_action = gtk::gio::SimpleAction::new("help", None);
         help_action.connect_activate(move |_, _| {
-            Self::show_about_window();
+            // TODO: open help
+            println!("help requested");
         });
         app.add_action(&help_action);
+        app.set_accels_for_action("app.help", &["F1"]);
 
+        // --- Quit ---
         let quit_action = gtk::gio::SimpleAction::new("quit", None);
         let app_clone = app.clone();
         quit_action.connect_activate(move |_, _| {

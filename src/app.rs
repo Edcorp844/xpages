@@ -274,12 +274,27 @@ impl SimpleComponent for XPagesApp {
                         ui.ctx().request_repaint();
                     }
 
-                    canvas.show(ui, &mut session, 1.0, &mut target, focus_id);
+                    canvas.show(ui, &mut session, &mut target, focus_id);
                 });
         });
 
         widgets.content_box.append(&egui_area);
         model.egui_area = Some(egui_area);
+
+        // Always use the global app – register() already added "open" to it
+        let app = relm4::main_application();
+
+        if let Some(open_action) = app
+            .lookup_action("open")
+            .and_then(|a| a.downcast::<gtk::gio::SimpleAction>().ok())
+        {
+            let sender = sender.clone();
+            open_action.connect_activate(move |_, _| {
+                sender.input(AppMsg::RequestOpen);
+            });
+        } else {
+            eprintln!("WARNING: app.open action not found – was register() called?");
+        }
 
         ComponentParts { model, widgets }
     }
@@ -293,11 +308,28 @@ impl SimpleComponent for XPagesApp {
                     .build();
 
                 let filters = gtk::gio::ListStore::new::<gtk::FileFilter>();
+
+                let office = gtk::FileFilter::new();
+                office.set_name(Some("Word documents"));
+                office.add_pattern("*.docx");
+                office.add_pattern("*.doc");
+                office.add_pattern("*.odt");
+                office.add_pattern("*.rtf");
+                office.add_mime_type(
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                );
+                office.add_mime_type("application/msword");
+                office.add_mime_type("application/vnd.oasis.opendocument.text");
+                filters.append(&office);
+
+                // Optional: everything
                 let all = gtk::FileFilter::new();
                 all.set_name(Some("All files"));
                 all.add_pattern("*");
                 filters.append(&all);
+
                 dialog.set_filters(Some(&filters));
+                dialog.set_default_filter(Some(&office));
 
                 let sender = sender.clone();
                 dialog.open(

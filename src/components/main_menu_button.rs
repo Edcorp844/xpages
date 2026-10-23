@@ -20,29 +20,39 @@ impl Component for MainMenuButton {
             set_popover = &gtk::PopoverMenu::from_model(Some(&{
                 let menu = gtk::gio::Menu::new();
 
-                let global_section = gtk::gio::Menu::new();
+                let new_document_section = gtk::gio::Menu::new();
+
                 let new_item = gtk::gio::MenuItem::new(Some("New"), Some("app.new"));
                 new_item.set_attribute_value("accel", Some(&"<Primary>N".to_variant()));
-                menu.append_section(None, &global_section);
-
-                let window_section = gtk::gio::Menu::new();
+                new_document_section.append_item(&new_item);
 
                 let open_item = gtk::gio::MenuItem::new(Some("Open"), Some("app.open"));
                 open_item.set_attribute_value("accel", Some(&"<Primary>O".to_variant()));
-                window_section.append_item(&open_item);
-                menu.append_section(None, &window_section);
+                new_document_section.append_item(&open_item);
 
-                let save_section = gtk::gio::Menu::new();
+                menu.append_section(None, &new_document_section);
+
+                let changes_section = gtk::gio::Menu::new();
 
                 let save_item = gtk::gio::MenuItem::new(Some("Save"), Some("app.save"));
                 save_item.set_attribute_value("accel", Some(&"<Primary>S".to_variant()));
+                changes_section.append_item(&save_item);
 
                 let save_as_item = gtk::gio::MenuItem::new(Some("Save As"), Some("app.save_as"));
                 save_as_item.set_attribute_value("accel", Some(&"<Primary><Shift>S".to_variant()));
+                changes_section.append_item(&save_as_item);
 
-                save_section.append_item(&save_item);
-                save_section.append_item(&save_as_item);
-                menu.append_section(None, &save_section);
+                let discard_item = gtk::gio::MenuItem::new(Some("Discard Changes"), Some("app.save_as"));
+                changes_section.append_item(&discard_item);
+
+                menu.append_section(None, &changes_section);
+
+                let template_section = gtk::gio::Menu::new();
+
+                let save_as_temp_item = gtk::gio::MenuItem::new(Some("Save as Template"), Some("app.save_as"));
+                template_section.append_item(&save_as_temp_item);
+
+                menu.append_section(None, &template_section);
 
                 let document_section = gtk::gio::Menu::new();
 

@@ -1,4 +1,4 @@
-// document_canvas.rs  (show implementation – unchanged logic, works with the fixed ppp)
+// document_canvas.rs — show() with zoom + smooth page scrolling
 
 use super::caret::{draw_caret, draw_selection};
 use crate::state::DocumentCanvas;
@@ -11,12 +11,34 @@ const RULER_SIZE: f32 = 12.0;
 const RULER_GAP: f32 = 6.0;
 const RULER_SAFETY_GAP: f32 = RULER_SIZE / 4.0;
 
+const ZOOM_MIN: f32 = 0.25;
+const ZOOM_MAX: f32 = 4.0;
+const ZOOM_STEP: f32 = 1.1;
+
 impl DocumentCanvas {
+    pub fn set_zoom(&mut self, z: f32) {
+        self.zoom = z.clamp(ZOOM_MIN, ZOOM_MAX);
+    }
+
+    #[allow(dead_code)]
+    pub fn zoom_in(&mut self) {
+        self.set_zoom(self.zoom * ZOOM_STEP);
+    }
+
+    #[allow(dead_code)]
+    pub fn zoom_out(&mut self) {
+        self.set_zoom(self.zoom / ZOOM_STEP);
+    }
+
+    #[allow(dead_code)]
+    pub fn zoom_reset(&mut self) {
+        self.set_zoom(1.0);
+    }
+
     pub fn show(
         &mut self,
         ui: &mut egui::Ui,
         session: &mut wordcraft_engine::Session,
-        zoom: f32,
         scroll_to_page: &mut Option<usize>,
         focus_id: egui::Id,
     ) {
@@ -29,9 +51,47 @@ impl DocumentCanvas {
             }
         }
 
+        // ------------------------------------------------------------------
+        // Zoom: pinch + Ctrl/Cmd+wheel (does NOT disable normal scrolling)
+        // ------------------------------------------------------------------
+        let mut zoom_changed = false;
+
+        let zoom_delta = ui.input(|i| i.zoom_delta());
+        if (zoom_delta - 1.0).abs() > 0.001 {
+            self.set_zoom(self.zoom * zoom_delta);
+            zoom_changed = true;
+        }
+
+        let (cmd, scroll_y) = ui.input(|i| {
+            (i.modifiers.command, i.smooth_scroll_delta.y)
+        });
+
+        if cmd && scroll_y.abs() > 0.0 {
+            let factor = if scroll_y > 0.0 {
+                ZOOM_STEP
+            } else {
+                1.0 / ZOOM_STEP
+            };
+            self.set_zoom(self.zoom * factor);
+            zoom_changed = true;
+
+            // Consume scroll so the document does not pan while zooming
+            ui.ctx().input_mut(|i| {
+                i.smooth_scroll_delta = egui::Vec2::ZERO;
+            });
+        }
+
+        if zoom_changed {
+            self.textures.clear();
+            ui.ctx().request_repaint();
+        }
+
+        let logical_scale = self.zoom * PX_PER_PT;
+
+        // ------------------------------------------------------------------
+
         let rev = session.rev();
         let layout = session.layout();
-        let logical_scale = zoom * PX_PER_PT;
         let target = scroll_to_page.take();
 
         self.caret_blink_tick();
@@ -56,7 +116,6 @@ impl DocumentCanvas {
         let mut first_page_rect = egui::Rect::NOTHING;
         let mut hovering_page = false;
 
-        // Temporarily hide scroll bars to remove the default side lines
         ui.style_mut().visuals.widgets.noninteractive.bg_stroke = egui::Stroke::NONE;
 
         let mask_height = RULER_SIZE + RULER_GAP + RULER_SAFETY_GAP;
@@ -69,18 +128,33 @@ impl DocumentCanvas {
                 .layout(*ui.layout()),
         );
 
-        // 1. Draw the Document Area
+        // Smooth continuous scrolling — defaults enabled (no .scroll(false))
         egui::ScrollArea::both()
             .id_salt("doc_scroll")
             .auto_shrink([false, false])
+            .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded)
+            .animated(true)
             .show(&mut scroll_ui, |ui| {
                 ui.add_space(RULER_GAP);
 
+                let max_side = ui.ctx().input(|i| i.max_texture_side) as f32;
+
                 for (i, page) in layout.pages.iter().enumerate() {
-                    let phys_w = (page.w * logical_scale * ppp).ceil();
-                    let phys_h = (page.h * logical_scale * ppp).ceil();
-                    let screen_w = phys_w / ppp;
-                    let screen_h = phys_h / ppp;
+                    // Desired physical size at current zoom
+                    let mut phys_w = (page.w * logical_scale * ppp).ceil().max(1.0);
+                    let mut phys_h = (page.h * logical_scale * ppp).ceil().max(1.0);
+
+                    // Cap texture to GPU limit (prevents panic at high zoom)
+                    let longest = phys_w.max(phys_h);
+                    if longest > max_side {
+                        let s = max_side / longest;
+                        phys_w = (phys_w * s).floor().max(1.0);
+                        phys_h = (phys_h * s).floor().max(1.0);
+                    }
+
+                    // On-screen size follows zoom (may upscale a capped texture)
+                    let screen_w = (page.w * logical_scale * ppp).ceil() / ppp;
+                    let screen_h = (page.h * logical_scale * ppp).ceil() / ppp;
                     let page_render_scale = phys_w / page.w;
 
                     let row_h = screen_h + PAGE_GAP;
@@ -113,8 +187,7 @@ impl DocumentCanvas {
                         }
                     }
 
-                    // --- HANDLE MOUSE EVENTS ---
-                    // 1. Click to place cursor
+                    // Click → caret
                     if response.clicked() {
                         if let Some(pos) = response.interact_pointer_pos() {
                             if page_rect.contains(pos) {
@@ -138,7 +211,7 @@ impl DocumentCanvas {
                         }
                     }
 
-                    // 2. Drag to select text
+                    // Drag → select
                     if response.dragged() {
                         if let Some(pos) = response.interact_pointer_pos() {
                             if page_rect.contains(pos) {
@@ -237,7 +310,7 @@ impl DocumentCanvas {
                 }
             });
 
-        // 2. Draw Sticky Overlays
+        // Sticky rulers
         if first_page_rect.is_positive() {
             let visual = ui.style().visuals.clone();
             let ruler_bg = if visual.dark_mode {

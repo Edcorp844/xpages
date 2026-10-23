@@ -323,9 +323,7 @@ mod imp {
                 let converted_events: Vec<egui::Event> = input_events
                     .into_iter()
                     .map(|ev| match ev {
-                        egui::Event::PointerMoved(p) => {
-                            egui::Event::PointerMoved(p / text)
-                        }
+                        egui::Event::PointerMoved(p) => egui::Event::PointerMoved(p / text),
                         egui::Event::PointerButton {
                             pos,
                             button,
@@ -545,8 +543,7 @@ mod imp {
 
             // ---- Scroll --------------------------------------------------------
             let scroll = gtk::EventControllerScroll::new(
-                gtk::EventControllerScrollFlags::BOTH_AXES
-                    | gtk::EventControllerScrollFlags::DISCRETE,
+                gtk::EventControllerScrollFlags::BOTH_AXES,
             );
             {
                 let obj = obj.clone();
@@ -562,6 +559,36 @@ mod imp {
                     });
                     glib::Propagation::Proceed
                 });
+            }
+
+            // ---- Pinch zoom (trackpad / touch) --------------------------------
+            // Use Rc<Cell<…>> so both closures can share last_scale.
+            let zoom_gesture = gtk::GestureZoom::new();
+            {
+                let last_scale = Rc::new(Cell::new(1.0_f64));
+
+                {
+                    let last_scale = Rc::clone(&last_scale);
+                    zoom_gesture.connect_begin(move |_, _| {
+                        last_scale.set(1.0);
+                    });
+                }
+
+                {
+                    let obj = obj.clone();
+                    let last_scale = Rc::clone(&last_scale);
+                    zoom_gesture.connect_scale_changed(move |_g, scale| {
+                        let prev = last_scale.get();
+                        // Avoid div-by-zero if begin didn't fire
+                        let prev = if prev <= 0.0 { 1.0 } else { prev };
+                        let factor = (scale / prev) as f32;
+                        last_scale.set(scale);
+                        if factor.is_finite() && (factor - 1.0).abs() > 0.0001 {
+                            let mut events = obj.imp().input_events.borrow_mut();
+                            events.push(egui::Event::Zoom(factor));
+                        }
+                    });
+                }
             }
 
             // ---- Keyboard ------------------------------------------------------
@@ -645,6 +672,7 @@ mod imp {
             obj.add_controller(gesture_click);
             obj.add_controller(motion);
             obj.add_controller(scroll);
+            obj.add_controller(zoom_gesture);
             obj.add_controller(key_controller);
         }
 
