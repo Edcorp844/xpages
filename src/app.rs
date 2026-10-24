@@ -6,7 +6,7 @@ use std::sync::Once;
 use relm4::{adw, adw::prelude::*, prelude::*};
 use serde_json::json;
 
-use crate::components::sidebar::rebuild_thumb_list;
+use crate::components::sidebar::{rebuild_thumb_list, rebuild_toc_list};
 use crate::components::{EguiArea, MainMenuButton};
 use crate::editor::input::handle_editing;
 use crate::state::DocumentCanvas;
@@ -33,6 +33,7 @@ pub struct XPagesApp {
     status: String,
     page_count: usize,
     thumb_list: Option<gtk::ListBox>,
+    toc_list: Option<gtk::ListBox>,
     main_menu_button: Controller<MainMenuButton>,
 }
 
@@ -52,38 +53,65 @@ impl SimpleComponent for XPagesApp {
             set_content = &adw::OverlaySplitView {
                 set_sidebar_position: gtk::PackType::Start,
                 set_show_sidebar: true,
-                set_min_sidebar_width: 140.0,
-                set_max_sidebar_width: 220.0,
+                set_min_sidebar_width: 160.0,
+                set_max_sidebar_width: 260.0,
 
+                // -------------------- Sidebar --------------------
                 #[wrap(Some)]
                 set_sidebar = &adw::ToolbarView {
                     add_top_bar = &adw::HeaderBar {
                         #[wrap(Some)]
                         set_title_widget = &gtk::Label {
-                            set_label: "Pages",
+                            set_label: "Navigate",
                             add_css_class: "title",
                         },
                         pack_end = model.main_menu_button.widget() {}
                     },
-                    #[wrap(Some)]
-                    #[name = "thumb_scroll"]
-                    set_content = &gtk::ScrolledWindow {
-                        set_vexpand: true,
-                        set_policy: (gtk::PolicyType::Never, gtk::PolicyType::Automatic),
 
-                        // --- GNOME Document Viewer behavior ---
-                        // ListBox packs tightly at top, does NOT stretch its rows.
-                        #[wrap(Some)]
-                        #[name = "thumb_list"]
-                        set_child = &gtk::ListBox {
-                            set_selection_mode: gtk::SelectionMode::Single,
-                            add_css_class: "navigation-sidebar",
-                            set_valign: gtk::Align::Start,
-                            set_vexpand: false,
+                    #[wrap(Some)]
+                    #[name = "side_stack"]
+                    set_content = &adw::ViewStack {
+                        set_vexpand: true,
+
+                        // Pages — thumbnails
+                        add_titled[Some("pages"), "Pages"] = &gtk::ScrolledWindow {
+                            set_vexpand: true,
+                            set_policy: (gtk::PolicyType::Never, gtk::PolicyType::Automatic),
+
+                            #[wrap(Some)]
+                            #[name = "thumb_list"]
+                            set_child = &gtk::ListBox {
+                                set_selection_mode: gtk::SelectionMode::Single,
+                                add_css_class: "navigation-sidebar",
+                                set_valign: gtk::Align::Start,
+                                set_vexpand: false,
+                            },
                         },
+
+                        // Contents — hierarchical TOC
+                        add_titled[Some("contents"), "Contents"] = &gtk::ScrolledWindow {
+                            set_vexpand: true,
+                            set_policy: (gtk::PolicyType::Never, gtk::PolicyType::Automatic),
+
+                            #[wrap(Some)]
+                            #[name = "toc_list"]
+                            set_child = &gtk::ListBox {
+                                set_selection_mode: gtk::SelectionMode::Single,
+                                add_css_class: "navigation-sidebar",
+                                set_valign: gtk::Align::Start,
+                                set_vexpand: false,
+                            },
+                        },
+                    },
+
+                    // Document-viewer style switcher under the stack
+                    #[name = "side_switcher"]
+                    add_bottom_bar = &adw::ViewSwitcherBar {
+                        set_reveal: true,
                     },
                 },
 
+                // -------------------- Main content --------------------
                 #[wrap(Some)]
                 set_content = &adw::ToolbarView {
                     add_top_bar = &adw::HeaderBar {
@@ -101,7 +129,6 @@ impl SimpleComponent for XPagesApp {
                         set_spacing: 12,
                         add_css_class: "toolbar",
 
-                        // START
                         gtk::Box {
                             set_orientation: gtk::Orientation::Horizontal,
                             set_halign: gtk::Align::Start,
@@ -117,7 +144,6 @@ impl SimpleComponent for XPagesApp {
                             },
                         },
 
-                        // CENTER
                         gtk::Box {
                             set_orientation: gtk::Orientation::Horizontal,
                             set_halign: gtk::Align::Center,
@@ -154,7 +180,6 @@ impl SimpleComponent for XPagesApp {
                             },
                         },
 
-                        // END
                         gtk::Box {
                             set_orientation: gtk::Orientation::Horizontal,
                             set_halign: gtk::Align::End,
@@ -203,11 +228,30 @@ impl SimpleComponent for XPagesApp {
             status: String::new(),
             page_count: 0,
             thumb_list: None,
+            toc_list: None,
             main_menu_button,
         };
 
         let widgets = view_output!();
 
+        // ViewSwitcherBar ↔ ViewStack (Document Viewer pattern)
+        widgets.side_switcher.set_stack(Some(&widgets.side_stack));
+
+        // Optional icons on stack pages
+        if let Some(child) = widgets.side_stack.child_by_name("pages") {
+            widgets
+                .side_stack
+                .page(&child)
+                .set_icon_name(Some("view-paged-symbolic"));
+        }
+        if let Some(child) = widgets.side_stack.child_by_name("contents") {
+            widgets
+                .side_stack
+                .page(&child)
+                .set_icon_name(Some("view-list-symbolic"));
+        }
+
+        // Thumbnails → page index
         {
             let sender = sender.clone();
             widgets.thumb_list.connect_row_activated(move |_, row| {
@@ -216,7 +260,19 @@ impl SimpleComponent for XPagesApp {
                 }
             });
         }
+
+        // TOC → page stored in widget_name
+        {
+            let sender = sender.clone();
+            widgets.toc_list.connect_row_activated(move |_, row| {
+                if let Ok(page) = row.widget_name().parse::<usize>() {
+                    sender.input(AppMsg::GoToPage(page));
+                }
+            });
+        }
+
         model.thumb_list = Some(widgets.thumb_list.clone());
+        model.toc_list = Some(widgets.toc_list.clone());
 
         {
             let is_dark = Rc::clone(&is_dark);
@@ -281,9 +337,7 @@ impl SimpleComponent for XPagesApp {
         widgets.content_box.append(&egui_area);
         model.egui_area = Some(egui_area);
 
-        // Always use the global app – register() already added "open" to it
         let app = relm4::main_application();
-
         if let Some(open_action) = app
             .lookup_action("open")
             .and_then(|a| a.downcast::<gtk::gio::SimpleAction>().ok())
@@ -322,7 +376,6 @@ impl SimpleComponent for XPagesApp {
                 office.add_mime_type("application/vnd.oasis.opendocument.text");
                 filters.append(&office);
 
-                // Optional: everything
                 let all = gtk::FileFilter::new();
                 all.set_name(Some("All files"));
                 all.add_pattern("*");
@@ -371,6 +424,9 @@ impl SimpleComponent for XPagesApp {
 
                         if let Some(list) = self.thumb_list.as_ref() {
                             rebuild_thumb_list(list, &self.session, page_count);
+                        }
+                        if let Some(list) = self.toc_list.as_ref() {
+                            rebuild_toc_list(list, &self.session);
                         }
                         if let Some(area) = self.egui_area.as_ref() {
                             area.grab_focus();

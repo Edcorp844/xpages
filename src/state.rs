@@ -8,12 +8,7 @@ pub struct DocumentCanvas {
     pub caret_visible: bool,
     pub last_blink: Instant,
     pub last_ppp: f32,
-    /// target zoom (user intent)
     pub zoom: f32,
-    /// smoothed zoom used for layout/draw
-    pub display_zoom: f32,
-    /// seconds since zoom last changed
-    pub zoom_settle: f32,
     pub last_scroll_y: f32,
     pub last_visible_page: Option<usize>,
     pub scroll_offset: egui::Vec2,
@@ -29,8 +24,6 @@ impl Default for DocumentCanvas {
             last_blink: Instant::now(),
             last_ppp: 1.0,
             zoom: 1.0,
-            display_zoom: 1.0,
-            zoom_settle: 0.0,
             last_scroll_y: 0.0,
             last_visible_page: None,
             scroll_offset: egui::Vec2::ZERO,
