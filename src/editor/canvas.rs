@@ -1,4 +1,4 @@
-// document_canvas.rs — stable zoom (viewport-anchored) + no flicker
+// document_canvas.rs — stable zoom + lean render path
 
 use super::caret::{draw_caret, draw_selection};
 use crate::state::DocumentCanvas;
@@ -52,8 +52,7 @@ impl DocumentCanvas {
         }
 
         // ------------------------------------------------------------------
-        // Zoom (pinch + Ctrl/Cmd+wheel)
-        // Keep the same content point under the viewport center.
+        // Zoom (pinch + Ctrl/Cmd+wheel) — anchor viewport center
         // ------------------------------------------------------------------
         let old_zoom = self.zoom;
         let mut zoom_changed = false;
@@ -75,29 +74,24 @@ impl DocumentCanvas {
             zoom_changed = true;
         }
 
-        // Never pan from the same gesture that zooms
         if zoom_changed {
             ui.ctx().input_mut(|i| {
                 i.smooth_scroll_delta = egui::Vec2::ZERO;
             });
         }
 
-        // Scroll offsets to feed into ScrollArea this frame
-        let mut scroll_x = self.scroll_offset.x;
-        let mut scroll_y = self.scroll_offset.y;
-
+        // Only force offset on zoom frames — otherwise ScrollArea owns scrolling
+        let mut force_offset: Option<egui::Vec2> = None;
         if zoom_changed {
             let ratio = self.zoom / old_zoom.max(1e-6);
-            // Viewport size of the scroll region (approx; good enough for anchoring)
             let vh = ui.available_height().max(1.0);
             let vw = ui.available_width().max(1.0);
-
             let anchor_y = self.scroll_offset.y + vh * 0.5;
             let anchor_x = self.scroll_offset.x + vw * 0.5;
-
-            scroll_y = (anchor_y * ratio - vh * 0.5).max(0.0);
-            scroll_x = (anchor_x * ratio - vw * 0.5).max(0.0);
-
+            force_offset = Some(egui::vec2(
+                (anchor_x * ratio - vw * 0.5).max(0.0),
+                (anchor_y * ratio - vh * 0.5).max(0.0),
+            ));
             ui.ctx().request_repaint();
         }
 
@@ -108,6 +102,7 @@ impl DocumentCanvas {
         let rev = session.rev();
         let layout = session.layout();
         let target = scroll_to_page.take();
+        let n_pages = layout.pages.len();
 
         self.caret_blink_tick();
         if self.editing {
@@ -143,189 +138,85 @@ impl DocumentCanvas {
                 .layout(*ui.layout()),
         );
 
-        let output = egui::ScrollArea::both()
+        // Precompute row heights once (cheap f32s, avoids redoing ceil in two loops)
+        let mut row_h = Vec::with_capacity(n_pages);
+        let mut screen_w = Vec::with_capacity(n_pages);
+        for page in layout.pages.iter() {
+            let sw = (page.w * logical_scale * ppp).ceil() / ppp;
+            let sh = (page.h * logical_scale * ppp).ceil() / ppp;
+            screen_w.push(sw);
+            row_h.push(sh + PAGE_GAP);
+        }
+
+        let mut sa = egui::ScrollArea::both()
             .id_salt("doc_scroll")
             .auto_shrink([false, false])
             .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded)
-            .animated(!zoom_changed)
-            .vertical_scroll_offset(scroll_y)
-            .horizontal_scroll_offset(scroll_x)
-            .show(&mut scroll_ui, |ui| {
-                let frame_clip = ui.clip_rect();
-                let content_top = ui.cursor().top();
-                let viewport_center_content = (frame_clip.center().y - content_top) + RULER_GAP;
+            .animated(!zoom_changed);
 
-                // Nearest page to viewport center
-                let mut closest_page_idx: Option<usize> = None;
-                let mut closest_dist = f32::INFINITY;
-                {
-                    let mut acc_y = 0.0_f32;
-                    for (i, page) in layout.pages.iter().enumerate() {
-                        let screen_h = (page.h * logical_scale * ppp).ceil() / ppp;
-                        let row_h = screen_h + PAGE_GAP;
-                        let row_center = acc_y + row_h * 0.5;
-                        let dist = (row_center - viewport_center_content).abs();
-                        if dist < closest_dist {
-                            closest_dist = dist;
-                            closest_page_idx = Some(i);
-                        }
-                        acc_y += row_h;
+        if let Some(off) = force_offset {
+            sa = sa
+                .vertical_scroll_offset(off.y)
+                .horizontal_scroll_offset(off.x);
+        }
+
+        let output = sa.show(&mut scroll_ui, |ui| {
+            let frame_clip = ui.clip_rect();
+            let content_top = ui.cursor().top();
+            let viewport_center_content = (frame_clip.center().y - content_top) + RULER_GAP;
+
+            // Nearest page — uses precomputed row_h
+            let mut closest_page_idx: Option<usize> = None;
+            let mut closest_dist = f32::INFINITY;
+            {
+                let mut acc_y = 0.0_f32;
+                for (i, &rh) in row_h.iter().enumerate() {
+                    let row_center = acc_y + rh * 0.5;
+                    let dist = (row_center - viewport_center_content).abs();
+                    if dist < closest_dist {
+                        closest_dist = dist;
+                        closest_page_idx = Some(i);
                     }
+                    acc_y += rh;
                 }
-                self.last_visible_page = closest_page_idx;
+            }
+            self.last_visible_page = closest_page_idx;
 
-                let n_pages = layout.pages.len();
-                let (render_lo, render_hi) = match closest_page_idx {
-                    Some(c) => (c.saturating_sub(2), (c + 2).min(n_pages.saturating_sub(1))),
-                    None => (usize::MAX, 0),
-                };
+            let (render_lo, render_hi) = match closest_page_idx {
+                Some(c) => (c.saturating_sub(2), (c + 2).min(n_pages.saturating_sub(1))),
+                None => (usize::MAX, 0),
+            };
 
-                ui.add_space(RULER_GAP);
+            ui.add_space(RULER_GAP);
 
-                let max_side = ui.ctx().input(|i| i.max_texture_side) as f32;
+            let max_side = ui.ctx().input(|i| i.max_texture_side) as f32;
+            let avail_w = ui.available_width();
 
-                for (i, page) in layout.pages.iter().enumerate() {
-                    let screen_w = (page.w * logical_scale * ppp).ceil() / ppp;
-                    let screen_h = (page.h * logical_scale * ppp).ceil() / ppp;
+            for (i, page) in layout.pages.iter().enumerate() {
+                let sw = screen_w[i];
+                let sh = row_h[i] - PAGE_GAP;
+                let rw = avail_w.max(sw + 64.0);
 
-                    let row_h = screen_h + PAGE_GAP;
-                    let row_w = ui.available_width().max(screen_w + 64.0);
+                // Far from viewport: allocate space only (keeps scroll height + feel)
+                let in_render_set =
+                    closest_page_idx.is_some() && i >= render_lo && i <= render_hi;
 
-                    let (response, painter) = ui
-                        .allocate_painter(egui::vec2(row_w, row_h), egui::Sense::click_and_drag());
+                if !in_render_set {
+                    // Still need the row in the scroll content; skip hit-test & raster
+                    let (response, painter) =
+                        ui.allocate_painter(egui::vec2(rw, row_h[i]), egui::Sense::hover());
 
                     if target == Some(i) {
                         response.scroll_to_me(Some(egui::Align::TOP));
                     }
 
+                    // Draw cached texture if we have one (smooth scroll through)
                     let center_x = response.rect.center().x;
                     let top_y = response.rect.min.y;
-                    let snap_x = ((center_x - screen_w * 0.5) * ppp).round() / ppp;
-                    let snap_y = (top_y * ppp).round() / ppp;
-
                     let page_rect = egui::Rect::from_min_size(
-                        egui::pos2(snap_x, snap_y),
-                        egui::vec2(screen_w, screen_h),
+                        egui::pos2(center_x - sw * 0.5, top_y),
+                        egui::vec2(sw, sh),
                     );
-
-                    if i == 0 {
-                        first_page_rect = page_rect;
-                    }
-
-                    let in_render_set =
-                        closest_page_idx.is_some() && i >= render_lo && i <= render_hi;
-                    let has_texture = self.textures.contains_key(&i);
-
-                    if let Some(pos) = ui.ctx().pointer_hover_pos() {
-                        if page_rect.contains(pos) {
-                            hovering_page = true;
-                        }
-                    }
-
-                    if response.clicked() {
-                        if let Some(pos) = response.interact_pointer_pos() {
-                            if page_rect.contains(pos) {
-                                self.editing = true;
-                                ui.memory_mut(|m| m.request_focus(focus_id));
-                                let local = (pos - page_rect.min) / logical_scale;
-                                let story = layout
-                                    .story_at(i, local.x, local.y)
-                                    .unwrap_or(wordcraft_doc::StoryRef::Body);
-
-                                if let Some(hit) = layout.hit(i, local.x, local.y, story) {
-                                    let extend = ui.input(|m| m.modifiers.shift);
-                                    let _ = session
-                                        .run("caret.set", &json!({ "pos": hit, "extend": extend }));
-                                    session.page_hint = i;
-                                    session.close_typing();
-                                    self.caret_blink_reset();
-                                    ui.ctx().request_repaint();
-                                }
-                            }
-                        }
-                    }
-
-                    if response.dragged() {
-                        if let Some(pos) = response.interact_pointer_pos() {
-                            if page_rect.contains(pos) {
-                                self.editing = true;
-                                ui.memory_mut(|m| m.request_focus(focus_id));
-                                let local = (pos - page_rect.min) / logical_scale;
-                                let story = layout
-                                    .story_at(i, local.x, local.y)
-                                    .unwrap_or(wordcraft_doc::StoryRef::Body);
-
-                                if let Some(hit) = layout.hit(i, local.x, local.y, story) {
-                                    let _ = session
-                                        .run("caret.set", &json!({ "pos": hit, "extend": true }));
-                                    session.page_hint = i;
-                                    session.close_typing();
-                                    self.caret_blink_reset();
-                                    ui.ctx().request_repaint();
-                                }
-                            }
-                        }
-                    }
-
-                    painter.rect_filled(
-                        page_rect.translate(egui::vec2(3.0, 3.0)),
-                        2.0,
-                        egui::Color32::from_black_alpha(40),
-                    );
-
-                    // Texture size (capped to GPU limit)
-                    let mut phys_w = (page.w * logical_scale * ppp).ceil().max(1.0);
-                    let mut phys_h = (page.h * logical_scale * ppp).ceil().max(1.0);
-                    let longest = phys_w.max(phys_h);
-                    if longest > max_side {
-                        let s = max_side / longest;
-                        phys_w = (phys_w * s).floor().max(1.0);
-                        phys_h = (phys_h * s).floor().max(1.0);
-                    }
-                    let page_render_scale = phys_w / page.w;
-
-                    let key = crate::utils::theme::texture_key(
-                        layout.pages.len(),
-                        page_render_scale,
-                        rev,
-                        ppp,
-                    ) ^ ((i as u64) << 32);
-
-                    let stale = self
-                        .textures
-                        .get(&i)
-                        .map(|(k, _)| *k != key)
-                        .unwrap_or(true);
-
-                    // Re-rasterize near viewport; never on the zoom frame itself
-                    // (keeps last texture visible → no flicker)
-                    if stale && in_render_set && !zoom_changed {
-                        let img = wordcraft_render::render_page(
-                            &session.doc,
-                            page,
-                            page_render_scale,
-                            &wordcraft_render::RenderOptions::default(),
-                        );
-                        let color = egui::ColorImage::from_rgba_premultiplied(
-                            [img.width as usize, img.height as usize],
-                            &img.pixels,
-                        );
-                        match self.textures.get_mut(&i) {
-                            Some((k, tex)) => {
-                                tex.set(color, egui::TextureOptions::LINEAR);
-                                *k = key;
-                            }
-                            None => {
-                                let tex = ui.ctx().load_texture(
-                                    format!("page{i}"),
-                                    color,
-                                    egui::TextureOptions::LINEAR,
-                                );
-                                self.textures.insert(i, (key, tex));
-                            }
-                        }
-                    }
-
                     if let Some((_, tex)) = self.textures.get(&i) {
                         painter.image(
                             tex.id(),
@@ -333,35 +224,175 @@ impl DocumentCanvas {
                             egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
                             egui::Color32::WHITE,
                         );
-                    } else if !has_texture {
-                        painter.rect_filled(page_rect, 0.0, egui::Color32::from_gray(248));
                     }
-
-                    draw_selection(
-                        &painter,
-                        page_rect,
-                        &selection_rects,
-                        i,
-                        logical_scale,
-                        accent_color,
-                    );
-
-                    if self.editing && self.caret_visible {
-                        draw_caret(&painter, page_rect, caret.as_ref(), i, logical_scale);
-                    }
-
-                    painter.rect_stroke(
-                        page_rect,
-                        0.0,
-                        egui::Stroke::new(1.0, egui::Color32::from_black_alpha(50)),
-                        egui::StrokeKind::Outside,
-                    );
+                    continue;
                 }
 
-                self.last_scroll_y = content_top;
-            });
+                let (response, painter) =
+                    ui.allocate_painter(egui::vec2(rw, row_h[i]), egui::Sense::click_and_drag());
 
-        // Public API — field `offset` is private in egui 0.37
+                if target == Some(i) {
+                    response.scroll_to_me(Some(egui::Align::TOP));
+                }
+
+                let center_x = response.rect.center().x;
+                let top_y = response.rect.min.y;
+                let snap_x = ((center_x - sw * 0.5) * ppp).round() / ppp;
+                let snap_y = (top_y * ppp).round() / ppp;
+
+                let page_rect = egui::Rect::from_min_size(
+                    egui::pos2(snap_x, snap_y),
+                    egui::vec2(sw, sh),
+                );
+
+                if i == 0 {
+                    first_page_rect = page_rect;
+                }
+
+                if let Some(pos) = ui.ctx().pointer_hover_pos() {
+                    if page_rect.contains(pos) {
+                        hovering_page = true;
+                    }
+                }
+
+                if response.clicked() {
+                    if let Some(pos) = response.interact_pointer_pos() {
+                        if page_rect.contains(pos) {
+                            self.editing = true;
+                            ui.memory_mut(|m| m.request_focus(focus_id));
+                            let local = (pos - page_rect.min) / logical_scale;
+                            let story = layout
+                                .story_at(i, local.x, local.y)
+                                .unwrap_or(wordcraft_doc::StoryRef::Body);
+                            if let Some(hit) = layout.hit(i, local.x, local.y, story) {
+                                let extend = ui.input(|m| m.modifiers.shift);
+                                let _ = session
+                                    .run("caret.set", &json!({ "pos": hit, "extend": extend }));
+                                session.page_hint = i;
+                                session.close_typing();
+                                self.caret_blink_reset();
+                                ui.ctx().request_repaint();
+                            }
+                        }
+                    }
+                }
+
+                if response.dragged() {
+                    if let Some(pos) = response.interact_pointer_pos() {
+                        if page_rect.contains(pos) {
+                            self.editing = true;
+                            ui.memory_mut(|m| m.request_focus(focus_id));
+                            let local = (pos - page_rect.min) / logical_scale;
+                            let story = layout
+                                .story_at(i, local.x, local.y)
+                                .unwrap_or(wordcraft_doc::StoryRef::Body);
+                            if let Some(hit) = layout.hit(i, local.x, local.y, story) {
+                                let _ = session
+                                    .run("caret.set", &json!({ "pos": hit, "extend": true }));
+                                session.page_hint = i;
+                                session.close_typing();
+                                self.caret_blink_reset();
+                                ui.ctx().request_repaint();
+                            }
+                        }
+                    }
+                }
+
+                painter.rect_filled(
+                    page_rect.translate(egui::vec2(3.0, 3.0)),
+                    2.0,
+                    egui::Color32::from_black_alpha(40),
+                );
+
+                let mut phys_w = (page.w * logical_scale * ppp).ceil().max(1.0);
+                let mut phys_h = (page.h * logical_scale * ppp).ceil().max(1.0);
+                let longest = phys_w.max(phys_h);
+                if longest > max_side {
+                    let s = max_side / longest;
+                    phys_w = (phys_w * s).floor().max(1.0);
+                    phys_h = (phys_h * s).floor().max(1.0);
+                }
+                let page_render_scale = phys_w / page.w;
+
+                let key = crate::utils::theme::texture_key(n_pages, page_render_scale, rev, ppp)
+                    ^ ((i as u64) << 32);
+
+                let stale = self
+                    .textures
+                    .get(&i)
+                    .map(|(k, _)| *k != key)
+                    .unwrap_or(true);
+
+                // Rasterize only nearby pages, and not on the zoom frame
+                if stale && !zoom_changed {
+                    let img = wordcraft_render::render_page(
+                        &session.doc,
+                        page,
+                        page_render_scale,
+                        &wordcraft_render::RenderOptions::default(),
+                    );
+                    let color = egui::ColorImage::from_rgba_premultiplied(
+                        [img.width as usize, img.height as usize],
+                        &img.pixels,
+                    );
+                    match self.textures.get_mut(&i) {
+                        Some((k, tex)) => {
+                            tex.set(color, egui::TextureOptions::LINEAR);
+                            *k = key;
+                        }
+                        None => {
+                            let tex = ui.ctx().load_texture(
+                                format!("page{i}"),
+                                color,
+                                egui::TextureOptions::LINEAR,
+                            );
+                            self.textures.insert(i, (key, tex));
+                        }
+                    }
+                }
+
+                if let Some((_, tex)) = self.textures.get(&i) {
+                    painter.image(
+                        tex.id(),
+                        page_rect,
+                        egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                        egui::Color32::WHITE,
+                    );
+                } else {
+                    painter.rect_filled(page_rect, 0.0, egui::Color32::from_gray(248));
+                }
+
+                draw_selection(
+                    &painter,
+                    page_rect,
+                    &selection_rects,
+                    i,
+                    logical_scale,
+                    accent_color,
+                );
+
+                if self.editing && self.caret_visible {
+                    draw_caret(&painter, page_rect, caret.as_ref(), i, logical_scale);
+                }
+
+                painter.rect_stroke(
+                    page_rect,
+                    0.0,
+                    egui::Stroke::new(1.0, egui::Color32::from_black_alpha(50)),
+                    egui::StrokeKind::Outside,
+                );
+            }
+
+            // Bound texture cache to neighborhood
+            if let Some(c) = closest_page_idx {
+                let lo = c.saturating_sub(3);
+                let hi = (c + 3).min(n_pages.saturating_sub(1));
+                self.textures.retain(|i, _| *i >= lo && *i <= hi);
+            }
+
+            self.last_scroll_y = content_top;
+        });
+
         self.scroll_offset = output.state.clamped_offset();
 
         // Sticky rulers
@@ -387,36 +418,33 @@ impl DocumentCanvas {
             } else {
                 egui::Color32::from_black_alpha(15)
             };
-
             let workspace_bg = visual.extreme_bg_color;
 
             let h_ruler_rect = egui::Rect::from_min_size(
                 egui::pos2(first_page_rect.min.x, window_rect.min.y),
                 egui::vec2(first_page_rect.width(), RULER_SIZE),
             );
-
             let v_ruler_rect = egui::Rect::from_min_size(
                 egui::pos2(window_rect.min.x, first_page_rect.min.y),
                 egui::vec2(RULER_SIZE, first_page_rect.height()),
             );
-
             let h_painter = ui.painter().with_clip_rect(h_ruler_rect);
             let v_painter = ui.painter().with_clip_rect(v_ruler_rect);
 
-            let mask_rect = egui::Rect::from_min_size(
-                egui::pos2(first_page_rect.min.x, window_rect.min.y + RULER_SIZE),
-                egui::vec2(first_page_rect.width(), RULER_GAP + RULER_SAFETY_GAP),
+            ui.painter().rect_filled(
+                egui::Rect::from_min_size(
+                    egui::pos2(first_page_rect.min.x, window_rect.min.y + RULER_SIZE),
+                    egui::vec2(first_page_rect.width(), RULER_GAP + RULER_SAFETY_GAP),
+                ),
+                0.0,
+                workspace_bg,
             );
-            ui.painter().rect_filled(mask_rect, 0.0, workspace_bg);
-
             h_painter.rect_filled(h_ruler_rect, 0.0, ruler_bg);
 
             let page_w = page_width_for_ruler(&layout);
             let base_x = first_page_rect.min.x;
-
             let margin_left = 72.0 * logical_scale;
             let margin_right = page_w - (72.0 * logical_scale);
-
             let text_area_start = base_x + margin_left;
             let text_area_end = base_x + margin_right;
 
@@ -451,7 +479,6 @@ impl DocumentCanvas {
                     let dist = x - text_area_start;
                     let tick_idx = (dist / step).round() as i32;
                     let is_inch = tick_idx % 8 == 0;
-
                     let height = if is_inch { 8.0 } else { 3.0 };
                     h_painter.line_segment(
                         [
@@ -460,13 +487,11 @@ impl DocumentCanvas {
                         ],
                         egui::Stroke::new(1.0, ruler_fg),
                     );
-
                     if is_inch && x >= text_area_start && x <= text_area_end {
-                        let label = format!("{}", tick_idx / 8);
                         h_painter.text(
                             egui::pos2(x, h_ruler_rect.center().y + 1.0),
                             egui::Align2::CENTER_CENTER,
-                            label,
+                            format!("{}", tick_idx / 8),
                             egui::FontId::proportional(9.0),
                             ruler_text,
                         );
@@ -490,7 +515,6 @@ impl DocumentCanvas {
                     egui::Stroke::NONE,
                 ));
             };
-
             let tri_y = h_ruler_rect.max.y - 2.0;
             if text_area_start >= h_ruler_rect.min.x && text_area_start <= h_ruler_rect.max.x {
                 draw_tri(&h_painter, egui::pos2(text_area_start, tri_y), 1.0);
@@ -500,10 +524,8 @@ impl DocumentCanvas {
             }
 
             v_painter.rect_filled(v_ruler_rect, 0.0, ruler_bg);
-
             let base_y = first_page_rect.min.y;
-            let margin_top = 72.0 * logical_scale;
-            let text_area_start_y = base_y + margin_top;
+            let text_area_start_y = base_y + 72.0 * logical_scale;
 
             if text_area_start_y > v_ruler_rect.min.y {
                 v_painter.rect_filled(
@@ -525,7 +547,6 @@ impl DocumentCanvas {
                     let dist = y - text_area_start_y;
                     let tick_idx = (dist / step).round() as i32;
                     let is_inch = tick_idx % 8 == 0;
-
                     let width = if is_inch { 8.0 } else { 3.0 };
                     v_painter.line_segment(
                         [
@@ -534,13 +555,11 @@ impl DocumentCanvas {
                         ],
                         egui::Stroke::new(1.0, ruler_fg),
                     );
-
                     if is_inch && y >= text_area_start_y {
-                        let label = format!("{}", tick_idx / 8);
                         v_painter.text(
                             egui::pos2(v_ruler_rect.center().x, y),
                             egui::Align2::CENTER_CENTER,
-                            label,
+                            format!("{}", tick_idx / 8),
                             egui::FontId::proportional(9.0),
                             ruler_text,
                         );
@@ -550,13 +569,12 @@ impl DocumentCanvas {
             }
 
             let center = egui::pos2(v_ruler_rect.max.x - 2.0, text_area_start_y);
-            let points = vec![
-                center + egui::vec2(1.0, 0.0),
-                center + egui::vec2(-3.0, -3.0),
-                center + egui::vec2(-3.0, 4.0),
-            ];
             v_painter.add(egui::Shape::convex_polygon(
-                points,
+                vec![
+                    center + egui::vec2(1.0, 0.0),
+                    center + egui::vec2(-3.0, -3.0),
+                    center + egui::vec2(-3.0, 4.0),
+                ],
                 visual.text_color(),
                 egui::Stroke::NONE,
             ));
